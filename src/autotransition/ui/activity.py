@@ -77,9 +77,17 @@ def summarize_lines(lines: list[str]) -> RuntimeActivity:
                 latest_lines=latest,
             )
 
+    if any("traceback" in line.lower() for line in clean_lines):
+        return RuntimeActivity(
+            phase="error",
+            message=_summarize_traceback(clean_lines),
+            detail="Traceback detected in ACE-Step runtime logs.",
+            latest_lines=latest,
+        )
+
     for line in reversed(clean_lines):
         lowered = line.lower()
-        if "traceback" in lowered or "failed" in lowered or "error" in lowered:
+        if "failed" in lowered or "error" in lowered:
             return RuntimeActivity(phase="error", message=line, detail=None, latest_lines=latest)
         if "starting automatic download" in lowered or "[model download] downloading" in lowered:
             return RuntimeActivity(phase="downloading", message=line, detail=None, latest_lines=latest)
@@ -138,3 +146,27 @@ def _parse_step_progress(line: str) -> tuple[str, str, str] | None:
     if not match:
         return None
     return match.group("percent"), match.group("done"), match.group("total")
+
+
+def _summarize_traceback(lines: list[str]) -> str:
+    traceback_index = None
+    for index in range(len(lines) - 1, -1, -1):
+        if "traceback" in lines[index].lower():
+            traceback_index = index
+            break
+    if traceback_index is None:
+        return "Traceback detected in ACE-Step runtime logs."
+
+    traceback_lines = lines[traceback_index:]
+    for line in reversed(traceback_lines):
+        if _looks_like_exception_line(line):
+            return line
+    return lines[traceback_index]
+
+
+def _looks_like_exception_line(line: str) -> bool:
+    if line.startswith(("File ", "Traceback", "During handling", "The above exception")):
+        return False
+    if line.startswith((" ", "\t", "^")):
+        return False
+    return bool(re.match(r"^[A-Za-z_][\w.]*?(Error|Exception|Warning|Interrupt|Exit|Timeout|Failure)\b", line))

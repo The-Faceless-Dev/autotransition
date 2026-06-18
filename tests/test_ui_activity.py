@@ -43,6 +43,22 @@ def test_summarize_lines_prefers_generation_progress_over_completed_download() -
     assert activity.message == "Generating audio: step 37/50 (74%)"
 
 
+def test_summarize_lines_reports_traceback_exception() -> None:
+    activity = summarize_lines(
+        [
+            "INFO:     Started server process [4913]",
+            "Traceback (most recent call last):",
+            '  File "/workspace/autotransition/runtimes/ACE-Step-1.5/.venv/bin/acestep-api", line 8, in <module>',
+            "    sys.exit(main())",
+            "ModuleNotFoundError: No module named 'acestep'",
+        ]
+    )
+
+    assert activity.phase == "error"
+    assert activity.message == "ModuleNotFoundError: No module named 'acestep'"
+    assert activity.detail == "Traceback detected in ACE-Step runtime logs."
+
+
 def test_runtime_activity_endpoint_reads_log_tail(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     log_dir = tmp_path / "data/logs"
