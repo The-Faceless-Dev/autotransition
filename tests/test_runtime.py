@@ -7,8 +7,10 @@ from autotransition.runtime.ace_step import (
     build_debug_start_api_command,
     build_install_commands,
     build_start_api_command,
+    build_uv_install_command,
     ensure_runtime_api,
     read_runtime_pid,
+    resolve_uv_executable,
     runtime_status,
     stop_runtime_process_tree,
 )
@@ -23,6 +25,34 @@ def test_runtime_install_commands_target_runtime_folder(tmp_path: Path) -> None:
     assert "uv/install.ps1" in commands[0]
     assert f"git clone https://github.com/ACE-Step/ACE-Step-1.5.git {config.ace_step_dir}" == commands[1]
     assert commands[-1] == "uv sync"
+
+
+def test_uv_install_command_uses_shell_script_on_posix(monkeypatch) -> None:
+    monkeypatch.setattr(ace_step_runtime.sys, "platform", "linux")
+
+    command = build_uv_install_command()
+
+    assert command == "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+
+def test_uv_install_command_uses_powershell_on_windows(monkeypatch) -> None:
+    monkeypatch.setattr(ace_step_runtime.sys, "platform", "win32")
+
+    command = build_uv_install_command()
+
+    assert "powershell" in command
+    assert "install.ps1" in command
+
+
+def test_resolve_uv_executable_finds_posix_home_uv(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    uv = home / ".local" / "bin" / "uv"
+    uv.parent.mkdir(parents=True)
+    uv.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(ace_step_runtime.Path, "home", lambda: home)
+    monkeypatch.setattr(ace_step_runtime.shutil, "which", lambda name: None)
+
+    assert resolve_uv_executable() == uv
 
 
 def test_runtime_start_command_uses_localhost_api(tmp_path: Path) -> None:

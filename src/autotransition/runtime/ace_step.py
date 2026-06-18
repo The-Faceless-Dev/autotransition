@@ -74,11 +74,17 @@ def runtime_pid_path() -> Path:
 def build_install_commands(config: RuntimeConfig = RuntimeConfig()) -> list[str]:
     install_dir = str(config.ace_step_dir)
     return [
-        'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"',
+        build_uv_install_command(),
         f"git clone https://github.com/ACE-Step/ACE-Step-1.5.git {install_dir}",
         f"cd {install_dir}",
         "uv sync",
     ]
+
+
+def build_uv_install_command() -> str:
+    if sys.platform == "win32":
+        return 'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
+    return "curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 
 def build_start_api_command(config: RuntimeConfig = RuntimeConfig()) -> str:
@@ -98,6 +104,10 @@ def resolve_uv_executable() -> Path | None:
     home_uv = Path.home() / ".local" / "bin" / "uv.exe"
     if home_uv.exists():
         return home_uv
+
+    home_uv_posix = Path.home() / ".local" / "bin" / "uv"
+    if home_uv_posix.exists():
+        return home_uv_posix
 
     return None
 
@@ -237,7 +247,7 @@ def run_install(config: RuntimeConfig = RuntimeConfig()) -> None:
         subprocess.run(build_install_commands(config)[0], shell=True, check=True)
         uv = resolve_uv_executable()
         if uv is None:
-            raise RuntimeError("uv was installed, but uv.exe could not be found. Restart PowerShell and rerun setup.")
+            raise RuntimeError("uv was installed, but the uv executable could not be found. Restart your shell and rerun setup.")
 
     if config.ace_step_dir.exists():
         if not (config.ace_step_dir / "pyproject.toml").exists():
