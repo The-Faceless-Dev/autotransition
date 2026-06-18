@@ -243,7 +243,7 @@ def test_ui_generate_from_selection_reports_missing_runtime_when_model_ready(tmp
     monkeypatch.setattr(
         ace_step_runtime,
         "runtime_status",
-        lambda config=None: SimpleNamespace(api_running=False),
+        lambda config=None: SimpleNamespace(api_running=False, message="ACE-Step API is not ready."),
     )
     source = make_wav(tmp_path / "song.wav", duration_ms=6000)
     model_dir = tmp_path / "models" / "acestep-v15-turbo"
@@ -267,5 +267,48 @@ def test_ui_generate_from_selection_reports_missing_runtime_when_model_ready(tmp
     assert response.status_code == 200
     result = response.json()["result"]
     assert result["status"] == "failed"
-    assert "ACE-Step API is not running" in result["message"]
+    assert "ACE-Step API is not ready" in result["message"]
     assert Path(result["scaffold_metadata_path"]).exists()
+
+
+def test_ui_generate_from_selection_passes_configured_runtime_port(tmp_path: Path, monkeypatch) -> None:
+    import autotransition.ui.app as ui_app
+
+    seen_ports = []
+
+    class Adapter:
+        def __init__(self, profile, model_path, runtime_config=None) -> None:
+            seen_ports.append(runtime_config.api_port)
+
+        def repaint(self, plan):
+            from autotransition.models import AceStepRuntimeError
+
+            raise AceStepRuntimeError("stop after config capture")
+
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    model_dir = tmp_path / "models" / "acestep-v15-turbo"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors").write_text("fake", encoding="utf-8")
+    monkeypatch.setattr(ui_app, "AceStepRepaintAdapter", Adapter)
+    client = TestClient(
+        create_app(
+            models_dir=tmp_path / "models",
+            runtime_config=RuntimeConfig(api_port=9101),
+        )
+    )
+
+    response = client.post(
+        "/api/generate/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "model_slug": "acestep-v15-turbo",
+            "continuation_point_seconds": 4.0,
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen_ports == [9101]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from autotransition.config import RuntimeConfig
 from autotransition.models.base import RepaintResult
 from autotransition.models.registry import ModelProfile
 from autotransition.pipeline import SourceSelectionPlan
@@ -22,21 +23,20 @@ def ace_step_runtime_available() -> bool:
 class AceStepRepaintAdapter:
     """Adapter boundary for ACE-Step repaint generation."""
 
-    def __init__(self, profile: ModelProfile, model_path: Path) -> None:
+    def __init__(self, profile: ModelProfile, model_path: Path, runtime_config: RuntimeConfig | None = None) -> None:
         self.profile = profile
         self.model_path = model_path
+        self.runtime_config = runtime_config or RuntimeConfig()
 
     def repaint(self, plan: SourceSelectionPlan) -> RepaintResult:
-        from autotransition.config import RuntimeConfig
         from autotransition.models.acestep_api import AceStepApiClient, AceStepApiError
         from autotransition.runtime.ace_step import runtime_status
 
-        config = RuntimeConfig()
+        config = self.runtime_config
         status = runtime_status(config)
         if not status.api_running:
             raise AceStepRuntimeError(
-                "ACE-Step API is not running. Run `autotransition setup` once, then start the full app with "
-                "`autotransition run`."
+                f"{status.message} Run `autotransition setup` once, then start the full app with `autotransition run`."
             )
 
         try:

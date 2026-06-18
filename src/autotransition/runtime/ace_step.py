@@ -68,6 +68,12 @@ class RuntimeProcess:
     command_line: str
 
 
+@dataclass(frozen=True)
+class ApiHealthDetail:
+    running: bool
+    message: str
+
+
 StartupStatusCallback = Callable[[str], None]
 
 
@@ -210,31 +216,45 @@ def find_runtime_processes(config: RuntimeConfig = RuntimeConfig()) -> list[Runt
 
 
 def api_health(config: RuntimeConfig = RuntimeConfig()) -> bool:
+    return api_health_detail(config).running
+
+
+def api_health_detail(config: RuntimeConfig = RuntimeConfig()) -> ApiHealthDetail:
     try:
         import httpx
 
         response = httpx.get(f"{config.api_base_url}/health", timeout=config.api_timeout_seconds)
         if response.status_code != 200:
-            return False
+            return ApiHealthDetail(
+                running=False,
+                message=f"Health check returned HTTP {response.status_code} from {config.api_base_url}/health.",
+            )
         content_type = response.headers.get("content-type", "").lower()
         body_preview = response.text[:200].lower()
         if "text/html" in content_type or "<html" in body_preview or "<!doctype html" in body_preview:
-            return False
-        return True
-    except Exception:
-        return False
+            return ApiHealthDetail(
+                running=False,
+                message=f"Health check returned an HTML response from {config.api_base_url}/health.",
+            )
+        return ApiHealthDetail(running=True, message=f"ACE-Step API reachable at {config.api_base_url}.")
+    except Exception as exc:
+        return ApiHealthDetail(
+            running=False,
+            message=f"Health check could not reach {config.api_base_url}/health: {exc}",
+        )
 
 
 def runtime_status(config: RuntimeConfig = RuntimeConfig()) -> AceStepRuntimeStatus:
     installed = config.ace_step_dir.exists() and (config.ace_step_dir / "pyproject.toml").exists()
     uv_available = resolve_uv_executable() is not None
     git_available = shutil.which("git") is not None
-    running = api_health(config)
+    health = api_health_detail(config)
+    running = health.running
 
     if running:
         message = "ACE-Step API is running."
     elif installed:
-        message = "ACE-Step runtime is installed, but the API is not running."
+        message = f"ACE-Step runtime is installed, but the API is not ready. {health.message}"
     else:
         message = "ACE-Step runtime is not installed. Run the first-time setup command."
 
@@ -363,14 +383,13 @@ def runtime_doctor(config: RuntimeConfig = RuntimeConfig()) -> list[RuntimeCheck
         )
     )
 
-    running = api_health(config)
+    health = api_health_detail(config)
+    running = health.running
     checks.append(
         RuntimeCheck(
             name="api",
             status=CheckStatus.OK if running else CheckStatus.WARN,
-            message=f"ACE-Step API reachable at {config.api_base_url}."
-            if running
-            else f"ACE-Step API is not reachable at {config.api_base_url}.",
+            message=health.message,
         )
     )
     return checks

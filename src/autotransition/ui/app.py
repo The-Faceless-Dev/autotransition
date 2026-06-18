@@ -457,7 +457,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
         try:
             ui_log.add("info", f"Running ACE-Step repaint with model '{profile.slug}'.")
-            adapter = AceStepRepaintAdapter(profile=profile, model_path=local_model_path(profile, models_dir))
+            adapter = AceStepRepaintAdapter(
+                profile=profile,
+                model_path=local_model_path(profile, models_dir),
+                runtime_config=runtime_config,
+            )
             repaint_result = adapter.repaint(plan)
         except AceStepRuntimeError as exc:
             ui_log.add("error", str(exc))

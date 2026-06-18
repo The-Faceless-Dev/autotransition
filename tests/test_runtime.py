@@ -5,6 +5,7 @@ from autotransition.config import RuntimeConfig
 from autotransition.runtime.ace_step import (
     RuntimeProcess,
     api_health,
+    api_health_detail,
     build_runtime_env,
     build_debug_start_api_command,
     build_install_commands,
@@ -109,6 +110,23 @@ def test_api_health_rejects_method_error(monkeypatch) -> None:
     )
 
     assert not api_health()
+
+
+def test_api_health_detail_reports_unreachable_url(monkeypatch) -> None:
+    def fake_get(*args, **kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "httpx",
+        SimpleNamespace(get=fake_get),
+    )
+
+    detail = api_health_detail(RuntimeConfig(api_port=9911))
+
+    assert not detail.running
+    assert "127.0.0.1:9911/health" in detail.message
+    assert "connection refused" in detail.message
 
 
 def test_ensure_runtime_api_reports_missing_install(tmp_path: Path) -> None:
