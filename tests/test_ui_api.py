@@ -1,0 +1,256 @@
+from pathlib import Path
+from types import SimpleNamespace
+
+from fastapi.testclient import TestClient
+
+from autotransition.ui import create_app
+
+
+def make_wav(path: Path, duration_ms: int = 3000) -> Path:
+    from pydub import AudioSegment
+
+    AudioSegment.silent(duration=duration_ms, frame_rate=44100).export(path, format="wav")
+    return path
+
+
+def test_ui_status_endpoint_reports_environment(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["models_dir"] == str(tmp_path)
+    assert data["repaint_model_count"] >= 1
+    assert ".mp3" in data["supported_input_formats"]
+    assert data["default_scaffold_format"] == "wav"
+    assert "python_version" in data
+
+
+def test_ui_presets_endpoint_returns_creator_presets(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/api/presets")
+
+    assert response.status_code == 200
+    slugs = {preset["slug"] for preset in response.json()}
+    assert "smooth-continuation" in slugs
+    assert "dj-bridge" in slugs
+
+
+def test_ui_models_endpoint_includes_install_status(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    models = response.json()
+    assert any(model["slug"] == "acestep-v15-turbo" for model in models)
+    assert all("status" in model for model in models)
+
+
+def test_ui_runtime_status_endpoint_returns_setup_commands(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "install_commands" in data
+    assert "uv sync" in data["install_commands"]
+    assert data["simple_setup_command"] == "autotransition runtime setup"
+    assert data["simple_start_command"] == "autotransition runtime start"
+
+
+def test_ui_scaffold_endpoint_validates_missing_source(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.post(
+        "/api/scaffolds",
+        json={
+            "source_path": str(tmp_path / "missing.wav"),
+            "preset": "smooth-continuation",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Source audio not found" in response.json()["detail"]
+
+
+def test_ui_logs_endpoint_records_validation_errors(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+    client.post(
+        "/api/scaffolds",
+        json={
+            "source_path": str(tmp_path / "missing.wav"),
+            "preset": "smooth-continuation",
+        },
+    )
+
+    response = client.get("/api/logs")
+
+    assert response.status_code == 200
+    assert any("Source audio not found" in entry["message"] for entry in response.json())
+
+
+def test_ui_source_probe_endpoint_returns_duration(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=3000)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post("/api/source/probe", json={"source_path": str(source)})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["path"] == str(source)
+    assert data["source_extension"] == ".wav"
+    assert data["source_format"] == "WAV"
+    assert data["duration_seconds"] == 3.0
+
+
+def test_ui_source_audio_endpoint_serves_file(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=1000)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.get("/api/source/audio", params={"path": str(source)})
+
+    assert response.status_code == 200
+    assert response.content
+
+
+def test_ui_selection_scaffold_uses_configured_future_length(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    output_dir = tmp_path / "out"
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/scaffolds/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "output_dir": str(output_dir),
+            "continuation_point_seconds": 4.0,
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["tail_start_seconds"] == 1.0
+    assert plan["tail_end_seconds"] == 4.0
+    assert plan["source_format"] == "WAV"
+    assert plan["audio_format"] == "wav"
+    assert plan["requested_continuation_seconds"] == 5.0
+    assert Path(plan["scaffold_path"]).exists()
+
+
+def test_ui_selection_scaffold_rejects_early_marker(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/scaffolds/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "continuation_point_seconds": 1.0,
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "too early" in response.json()["detail"]
+
+
+def test_ui_source_upload_accepts_audio_file(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "picked.wav", duration_ms=1200)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    with source.open("rb") as audio_file:
+        response = client.post(
+            "/api/source/upload",
+            files={"file": ("picked.wav", audio_file, "audio/wav")},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_filename"] == "picked.wav"
+    assert Path(data["stored_path"]).exists()
+    assert data["probe"]["source_format"] == "WAV"
+    assert data["probe"]["duration_seconds"] == 1.2
+
+
+def test_ui_source_upload_rejects_unsupported_extension(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/source/upload",
+        files={"file": ("notes.txt", b"not audio", "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported audio format" in response.json()["detail"]
+
+
+def test_ui_generate_from_selection_reports_missing_model(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    output_dir = tmp_path / "out"
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/generate/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "model_slug": "acestep-v15-turbo",
+            "output_dir": str(output_dir),
+            "continuation_point_seconds": 4.0,
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["status"] == "failed"
+    assert "not installed" in payload["result"]["message"]
+    assert Path(payload["result"]["scaffold_path"]).exists()
+    assert payload["plan"]["requested_continuation_seconds"] == 5.0
+
+
+def test_ui_generate_from_selection_reports_missing_runtime_when_model_ready(tmp_path: Path, monkeypatch) -> None:
+    import autotransition.runtime.ace_step as ace_step_runtime
+
+    monkeypatch.setattr(
+        ace_step_runtime,
+        "runtime_status",
+        lambda config=None: SimpleNamespace(api_running=False),
+    )
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    model_dir = tmp_path / "models" / "acestep-v15-turbo"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors").write_text("fake", encoding="utf-8")
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/generate/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "model_slug": "acestep-v15-turbo",
+            "continuation_point_seconds": 4.0,
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["status"] == "failed"
+    assert "ACE-Step API is not running" in result["message"]
+    assert Path(result["scaffold_metadata_path"]).exists()

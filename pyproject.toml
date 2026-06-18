@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotransition"
+version = "0.1.0"
+description = "Configurable pipeline foundation for AI-generated music transitions."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "The Faceless Dancer" }
+]
+dependencies = [
+  "fastapi>=0.115.0",
+  "huggingface_hub>=0.27.0",
+  "pydub>=0.25.1",
+  "python-multipart>=0.0.20",
+  "typer>=0.12.0",
+  "uvicorn>=0.32.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0"
+]
+
+[project.scripts]
+autotransition = "autotransition.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autotransition = ["ui/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

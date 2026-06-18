@@ -1,0 +1,107 @@
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from autotransition.config import RuntimeConfig
+from autotransition.models.acestep_api import AceStepApiClient, _extract_audio_path, _extract_task_result
+from autotransition.models.registry import get_model_profile
+from autotransition.pipeline import SourceSelectionPlan
+
+
+def test_extract_task_result_parses_result_json_string() -> None:
+    data = [
+        {
+            "task_id": "abc",
+            "status": 1,
+            "result": '[{"file": "/v1/audio?path=C:/tmp/generated.wav", "status": 1}]',
+        }
+    ]
+
+    result = _extract_task_result(data, "abc")
+
+    assert result is not None
+    assert result["file"] == "/v1/audio?path=C:/tmp/generated.wav"
+
+
+def test_extract_audio_path_reads_file_download_url() -> None:
+    path = _extract_audio_path({"file": "/v1/audio?path=C%3A%2Ftmp%2Fgenerated.wav"})
+
+    assert path == "C:/tmp/generated.wav"
+
+
+def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch) -> None:
+    scaffold = tmp_path / "scaffold.wav"
+    scaffold.write_bytes(b"audio")
+    plan = SourceSelectionPlan(
+        transition_id="test-generation",
+        source_path=tmp_path / "source.mp3",
+        source_extension=".mp3",
+        source_format="MP3",
+        source_duration_seconds=60.0,
+        continuation_point_seconds=30.0,
+        tail_start_seconds=9.0,
+        tail_end_seconds=30.0,
+        scaffold_path=scaffold,
+        metadata_path=tmp_path / "metadata.json",
+        caption="cinematic horror",
+        context_seconds=18.0,
+        repaint_overlap_seconds=3.0,
+        new_section_seconds=36.0,
+        requested_continuation_seconds=36.0,
+        effective_continuation_seconds=None,
+        repainting_start_seconds=18.0,
+        repainting_end_seconds=-1.0,
+        audio_format="wav",
+        bpm_hint=None,
+        key_hint=None,
+        seed=None,
+    )
+    calls = []
+
+    class Response:
+        def __init__(self, body, status_code=200, content=b"") -> None:
+            self._body = body
+            self.status_code = status_code
+            self.content = content
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        calls.append(("get", url, kwargs))
+        if url.endswith("/v1/models"):
+            return Response({"data": {"models": [{"name": "acestep-v15-turbo"}]}})
+        if url.endswith("/v1/audio"):
+            return Response({}, content=b"generated")
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        if url.endswith("/release_task"):
+            assert "json" not in kwargs
+            assert "src_audio_path" not in kwargs["data"]
+            assert kwargs["data"]["task_type"] == "repaint"
+            assert kwargs["data"]["batch_size"] == "1"
+            assert kwargs["data"]["thinking"] == "false"
+            assert "src_audio" in kwargs["files"]
+            filename, file_obj, mime = kwargs["files"]["src_audio"]
+            assert filename == "scaffold.wav"
+            assert file_obj.read() == b"audio"
+            assert mime == "audio/wav"
+            return Response({"data": {"task_id": "task-1"}})
+        if url.endswith("/query_result"):
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "generated.wav"}]})
+        return Response({})
+
+    fake_httpx = SimpleNamespace(get=fake_get, post=fake_post)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    result = AceStepApiClient(RuntimeConfig()).repaint(
+        plan=plan,
+        profile=get_model_profile("acestep-v15-turbo"),
+        save_dir=tmp_path / "generated",
+    )
+
+    assert result.output_path.read_bytes() == b"generated"
+    assert any(call[1].endswith("/release_task") for call in calls)

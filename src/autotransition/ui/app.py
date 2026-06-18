@@ -1,0 +1,491 @@
+"""FastAPI app for the local Autotransition UI."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from autotransition.audio import build_repaint_scaffold, build_selection_scaffold, probe_audio
+from autotransition.audio.formats import DEFAULT_SCAFFOLD_FORMAT, SUPPORTED_INPUT_FORMATS, validate_supported_source
+from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
+from autotransition.generation import GenerationResult, GenerationStatus
+from autotransition.models import (
+    AceStepRepaintAdapter,
+    AceStepRuntimeError,
+    ModelInstallError,
+    get_model_profile,
+    install_model,
+    repaint_capable_models,
+    resolve_model_status,
+)
+from autotransition.models.download import local_model_path
+from autotransition.models.status import InstallState
+from autotransition.pipeline import (
+    SourceSelectionRequest,
+    TransitionRequest,
+    create_scaffold_plan,
+    create_source_selection_plan,
+)
+from autotransition.presets import PRESETS, get_preset
+from autotransition.ui.activity import summarize_runtime_activity
+from autotransition.ui.state import UiLog, system_status
+
+
+class ScaffoldRequest(BaseModel):
+    source_path: str = Field(..., min_length=1)
+    preset: str = "smooth-continuation"
+    caption: str | None = None
+    output_dir: str | None = None
+    context_seconds: float | None = Field(None, gt=0)
+    repaint_overlap_seconds: float | None = Field(None, gt=0)
+    new_section_seconds: float | None = Field(None, gt=0)
+    bpm: float | None = Field(None, gt=0)
+    key: str | None = None
+    seed: int | None = None
+
+
+class ProbeRequest(BaseModel):
+    source_path: str = Field(..., min_length=1)
+
+
+class SelectionScaffoldRequest(ScaffoldRequest):
+    continuation_point_seconds: float = Field(..., gt=0)
+
+
+class GenerateSelectionRequest(SelectionScaffoldRequest):
+    model_slug: str = "acestep-v15-turbo"
+    auto_install: bool = False
+
+
+def create_app(models_dir: Path = Path("models")) -> FastAPI:
+    runtime_config = RuntimeConfig()
+    app = FastAPI(title="Autotransition", version="0.1.0")
+    static_dir = Path(__file__).parent / "static"
+    ui_log = UiLog()
+    ui_log.add("info", "UI server started.")
+
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(static_dir / "index.html")
+
+    @app.get("/api/status")
+    def get_status() -> dict[str, object]:
+        status = system_status(models_dir=models_dir)
+        status["supported_input_formats"] = list(SUPPORTED_INPUT_FORMATS)
+        status["default_scaffold_format"] = DEFAULT_SCAFFOLD_FORMAT
+        return status
+
+    @app.get("/api/runtime/status")
+    def get_runtime_status() -> dict[str, object]:
+        from autotransition.runtime.ace_step import build_install_commands, build_start_api_command, runtime_status
+
+        status = runtime_status(runtime_config).to_dict()
+        status["install_commands"] = build_install_commands(runtime_config)
+        status["start_api_command"] = build_start_api_command(runtime_config)
+        status["simple_setup_command"] = "autotransition runtime setup"
+        status["simple_start_command"] = "autotransition runtime start"
+        return status
+
+    @app.get("/api/runtime/activity")
+    def get_runtime_activity() -> dict[str, object]:
+        from autotransition.runtime.ace_step import runtime_status
+
+        activity = summarize_runtime_activity().to_dict()
+        status = runtime_status(runtime_config)
+        activity["api_running"] = status.api_running
+        activity["api_url"] = status.api_url
+        activity["runtime_message"] = status.message
+        return activity
+
+    @app.get("/api/source/audio")
+    def get_source_audio(path: str = Query(..., min_length=1)) -> FileResponse:
+        source_path = Path(path).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Source audio not found: {source_path}")
+        return FileResponse(source_path)
+
+    @app.post("/api/source/probe")
+    def probe_source(request: ProbeRequest) -> dict[str, object]:
+        source_path = Path(request.source_path).expanduser()
+        try:
+            result = probe_audio(source_path)
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        ui_log.add(
+            "info",
+            f"Loaded {result.source_format} source audio: {source_path}. "
+            f"Scaffolds will be normalized to {DEFAULT_SCAFFOLD_FORMAT.upper()}.",
+        )
+        return result.to_dict()
+
+    @app.post("/api/source/upload")
+    def upload_source(file: UploadFile = File(...)) -> dict[str, object]:
+        original_name = Path(file.filename or "source").name
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", original_name).strip("._") or "source"
+        suffix = Path(safe_name).suffix.lower()
+        temp_path = Path("data/input") / f"{Path(safe_name).stem}-{uuid4().hex[:8]}{suffix}"
+
+        try:
+            validate_supported_source(temp_path)
+        except ValueError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with temp_path.open("wb") as output:
+                shutil.copyfileobj(file.file, output)
+            result = probe_audio(temp_path)
+        except Exception as exc:
+            if temp_path.exists():
+                temp_path.unlink()
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            file.file.close()
+
+        ui_log.add(
+            "info",
+            f"Uploaded {result.source_format} source '{original_name}' to {temp_path}. "
+            f"Scaffolds will be normalized to {DEFAULT_SCAFFOLD_FORMAT.upper()}.",
+        )
+        return {
+            "original_filename": original_name,
+            "stored_path": str(temp_path),
+            "probe": result.to_dict(),
+        }
+
+    @app.get("/api/presets")
+    def get_presets() -> list[dict[str, Any]]:
+        return [
+            {
+                "slug": preset.slug,
+                "name": preset.name,
+                "description": preset.description,
+                "caption": preset.caption,
+                "config": {
+                    "context_seconds": preset.config.context_seconds,
+                    "repaint_overlap_seconds": preset.config.repaint_overlap_seconds,
+                    "new_section_seconds": preset.config.new_section_seconds,
+                    "candidate_count": preset.config.candidate_count,
+                },
+            }
+            for preset in PRESETS.values()
+        ]
+
+    @app.get("/api/models")
+    def get_models() -> list[dict[str, Any]]:
+        models = []
+        for profile in repaint_capable_models():
+            status = resolve_model_status(profile.slug, models_dir=models_dir)
+            models.append(
+                {
+                    "slug": profile.slug,
+                    "display_name": profile.display_name,
+                    "repo_id": profile.repo_id,
+                    "family": profile.family,
+                    "supports_repaint": profile.supports_repaint,
+                    "quality_label": profile.quality_label,
+                    "speed_label": profile.speed_label,
+                    "vram_guidance": profile.vram_guidance,
+                    "default_inference_steps": profile.default_inference_steps,
+                    "notes": profile.notes,
+                    "status": status.to_dict(),
+                }
+            )
+        return models
+
+    @app.post("/api/models/{slug}/install")
+    def install_selected_model(slug: str) -> dict[str, str]:
+        ui_log.add("info", f"Installing model '{slug}' from Hugging Face.")
+        try:
+            status = install_model(slug, models_dir=models_dir)
+        except (ValueError, ModelInstallError) as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        ui_log.add("info", f"Model '{slug}' installed at {status.local_path}.")
+        return status.to_dict()
+
+    @app.post("/api/scaffolds")
+    def create_scaffold(request: ScaffoldRequest) -> dict[str, Any]:
+        try:
+            selected = get_preset(request.preset)
+        except ValueError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        source_path = Path(request.source_path).expanduser()
+        if not source_path.exists():
+            message = f"Source audio not found: {source_path}"
+            ui_log.add("error", message)
+            raise HTTPException(status_code=400, detail=message)
+
+        base = selected.config
+        output = base.output
+        if request.output_dir:
+            output_dir = Path(request.output_dir).expanduser()
+            output = OutputConfig(
+                root_dir=output_dir,
+                scaffold_dir=output_dir,
+                generated_dir=output_dir / "generated",
+                export_dir=output_dir / "exports",
+                audio_format=output.audio_format,
+            )
+
+        config = TransitionConfig(
+            context_seconds=request.context_seconds or base.context_seconds,
+            repaint_overlap_seconds=request.repaint_overlap_seconds or base.repaint_overlap_seconds,
+            new_section_seconds=request.new_section_seconds or base.new_section_seconds,
+            output=output,
+            candidate_count=base.candidate_count,
+            seed=request.seed if request.seed is not None else base.seed,
+            bpm_hint=request.bpm if request.bpm is not None else base.bpm_hint,
+            key_hint=request.key if request.key else base.key_hint,
+        )
+        plan = create_scaffold_plan(
+            TransitionRequest(
+                source_path=source_path,
+                caption=request.caption or selected.caption,
+                config=config,
+            )
+        )
+
+        try:
+            ui_log.add(
+                "info",
+                f"Decoding {source_path.suffix.lower() or 'source'} and normalizing scaffold to "
+                f"{plan.audio_format.upper()}.",
+            )
+            build_repaint_scaffold(
+                source_path=plan.source_path,
+                output_path=plan.scaffold_path,
+                tail_seconds=config.tail_seconds,
+                blank_seconds=config.new_section_seconds,
+                output_format=plan.audio_format,
+            )
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        plan.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        plan.metadata_path.write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+        ui_log.add("info", f"Scaffold created: {plan.scaffold_path}")
+        return {"plan": plan.to_dict()}
+
+    @app.post("/api/scaffolds/from-selection")
+    def create_scaffold_from_selection(request: SelectionScaffoldRequest) -> dict[str, Any]:
+        try:
+            selected = get_preset(request.preset)
+        except ValueError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        source_path = Path(request.source_path).expanduser()
+        try:
+            probe = probe_audio(source_path)
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        base = selected.config
+        output = base.output
+        if request.output_dir:
+            output_dir = Path(request.output_dir).expanduser()
+            output = OutputConfig(
+                root_dir=output_dir,
+                scaffold_dir=output_dir,
+                generated_dir=output_dir / "generated",
+                export_dir=output_dir / "exports",
+                audio_format=output.audio_format,
+            )
+
+        config = TransitionConfig(
+            context_seconds=request.context_seconds or base.context_seconds,
+            repaint_overlap_seconds=request.repaint_overlap_seconds or base.repaint_overlap_seconds,
+            new_section_seconds=request.new_section_seconds or base.new_section_seconds,
+            output=output,
+            candidate_count=base.candidate_count,
+            seed=request.seed if request.seed is not None else base.seed,
+            bpm_hint=request.bpm if request.bpm is not None else base.bpm_hint,
+            key_hint=request.key if request.key else base.key_hint,
+        )
+
+        try:
+            plan = create_source_selection_plan(
+                SourceSelectionRequest(
+                    source_path=source_path,
+                    source_duration_seconds=probe.duration_seconds,
+                    continuation_point_seconds=request.continuation_point_seconds,
+                    caption=request.caption or selected.caption,
+                    config=config,
+                )
+            )
+            ui_log.add(
+                "info",
+                f"Decoding {plan.source_format} source selection and normalizing scaffold to "
+                f"{plan.audio_format.upper()}.",
+            )
+            build_selection_scaffold(
+                source_path=plan.source_path,
+                output_path=plan.scaffold_path,
+                tail_start_seconds=plan.tail_start_seconds,
+                tail_end_seconds=plan.tail_end_seconds,
+                blank_seconds=config.new_section_seconds,
+                output_format=plan.audio_format,
+            )
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        plan.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        plan.metadata_path.write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+        ui_log.add(
+            "info",
+            f"Selection scaffold created from {plan.tail_start_seconds:.2f}s to {plan.tail_end_seconds:.2f}s: "
+            f"{plan.scaffold_path}",
+        )
+        return {"plan": plan.to_dict()}
+
+    @app.post("/api/generate/from-selection")
+    def generate_from_selection(request: GenerateSelectionRequest) -> dict[str, object]:
+        generation_id = f"generation-{uuid4().hex[:12]}"
+        try:
+            profile = get_model_profile(request.model_slug)
+            selected = get_preset(request.preset)
+        except ValueError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        source_path = Path(request.source_path).expanduser()
+        try:
+            probe = probe_audio(source_path)
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        base = selected.config
+        output = base.output
+        if request.output_dir:
+            output_dir = Path(request.output_dir).expanduser()
+            output = OutputConfig(
+                root_dir=output_dir,
+                scaffold_dir=output_dir / "scaffolds",
+                generated_dir=output_dir / "generated",
+                export_dir=output_dir / "exports",
+                audio_format=output.audio_format,
+            )
+
+        config = TransitionConfig(
+            context_seconds=request.context_seconds or base.context_seconds,
+            repaint_overlap_seconds=request.repaint_overlap_seconds or base.repaint_overlap_seconds,
+            new_section_seconds=request.new_section_seconds or base.new_section_seconds,
+            output=output,
+            candidate_count=base.candidate_count,
+            seed=request.seed if request.seed is not None else base.seed,
+            bpm_hint=request.bpm if request.bpm is not None else base.bpm_hint,
+            key_hint=request.key if request.key else base.key_hint,
+        )
+
+        try:
+            plan = create_source_selection_plan(
+                SourceSelectionRequest(
+                    source_path=source_path,
+                    source_duration_seconds=probe.duration_seconds,
+                    continuation_point_seconds=request.continuation_point_seconds,
+                    caption=request.caption or selected.caption,
+                    config=config,
+                    transition_id=generation_id,
+                )
+            )
+            ui_log.add("info", "Preparing internal repaint scaffold for generation.")
+            build_selection_scaffold(
+                source_path=plan.source_path,
+                output_path=plan.scaffold_path,
+                tail_start_seconds=plan.tail_start_seconds,
+                tail_end_seconds=plan.tail_end_seconds,
+                blank_seconds=config.new_section_seconds,
+                output_format=plan.audio_format,
+            )
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        plan.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        plan.metadata_path.write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+
+        status = resolve_model_status(profile.slug, models_dir=models_dir)
+        if status.state != InstallState.READY:
+            if not request.auto_install:
+                message = f"Model '{profile.display_name}' is not installed. Install it before generating."
+                ui_log.add("error", message)
+                result = GenerationResult(
+                    generation_id=generation_id,
+                    status=GenerationStatus.FAILED,
+                    message=message,
+                    model_slug=profile.slug,
+                    scaffold_path=plan.scaffold_path,
+                    scaffold_metadata_path=plan.metadata_path,
+                )
+                return {"result": result.to_dict(), "plan": plan.to_dict()}
+
+            try:
+                ui_log.add("info", f"Auto-installing model '{profile.slug}' before generation.")
+                install_model(profile.slug, models_dir=models_dir)
+            except ModelInstallError as exc:
+                ui_log.add("error", str(exc))
+                result = GenerationResult(
+                    generation_id=generation_id,
+                    status=GenerationStatus.FAILED,
+                    message=str(exc),
+                    model_slug=profile.slug,
+                    scaffold_path=plan.scaffold_path,
+                    scaffold_metadata_path=plan.metadata_path,
+                )
+                return {"result": result.to_dict(), "plan": plan.to_dict()}
+
+        try:
+            ui_log.add("info", f"Running ACE-Step repaint with model '{profile.slug}'.")
+            adapter = AceStepRepaintAdapter(profile=profile, model_path=local_model_path(profile, models_dir))
+            repaint_result = adapter.repaint(plan)
+        except AceStepRuntimeError as exc:
+            ui_log.add("error", str(exc))
+            result = GenerationResult(
+                generation_id=generation_id,
+                status=GenerationStatus.FAILED,
+                message=str(exc),
+                model_slug=profile.slug,
+                scaffold_path=plan.scaffold_path,
+                scaffold_metadata_path=plan.metadata_path,
+            )
+            return {"result": result.to_dict(), "plan": plan.to_dict()}
+
+        result = GenerationResult(
+            generation_id=generation_id,
+            status=GenerationStatus.COMPLETE,
+            message="Generation complete.",
+            model_slug=profile.slug,
+            scaffold_path=plan.scaffold_path,
+            scaffold_metadata_path=plan.metadata_path,
+            generated_audio_path=repaint_result.output_path,
+            generated_metadata_path=repaint_result.metadata_path,
+        )
+        ui_log.add("info", f"Generated transition: {repaint_result.output_path}")
+        return {"result": result.to_dict(), "plan": plan.to_dict()}
+
+    @app.get("/api/logs")
+    def get_logs() -> list[dict[str, str]]:
+        return ui_log.entries()
+
+    return app

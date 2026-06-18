@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autotransition</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="brand">The Faceless Dancer</p>
+        <h1>Autotransition</h1>
+      </div>
+      <div class="status-strip" aria-live="polite">
+        <span id="ffmpegBadge" class="badge neutral">ffmpeg</span>
+        <span id="modelCountBadge" class="badge neutral">models</span>
+        <span id="runtimeBadge" class="badge neutral">runtime</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel workflow-panel">
+        <div class="panel-heading">
+          <h2>Source</h2>
+          <span id="sourceState" class="mini-state">Idle</span>
+        </div>
+
+        <div class="file-picker">
+          <label class="file-button" for="sourceFile">Choose Audio File</label>
+          <input id="sourceFile" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,audio/*" />
+          <span id="selectedFileName">No file selected</span>
+        </div>
+
+        <label class="field">
+          <span>Audio path</span>
+          <input id="sourcePath" type="text" placeholder="D:\music\song.mp3 or clip.wav" />
+        </label>
+
+        <div class="button-row source-actions">
+          <button id="loadSourceButton" class="secondary-button" type="button">Load Song</button>
+          <span id="sourceDuration" class="inline-readout">No source loaded</span>
+        </div>
+
+        <audio id="sourceAudio" class="audio-player" controls preload="metadata"></audio>
+
+        <div class="timeline-shell">
+          <div class="timeline-meta">
+            <span id="currentTimeReadout">0:00</span>
+            <span id="continuationReadout">Continue at 0:00</span>
+          </div>
+          <input id="continuationSlider" class="timeline-slider" type="range" min="0" max="0" step="0.01" value="0" />
+          <div class="selection-readout">
+            <span id="contextRange">Context not selected</span>
+            <span id="futureRange">Future length follows settings</span>
+          </div>
+          <div class="selection-readout">
+            <span id="sourceFormatReadout">Formats: MP3, WAV, FLAC, OGG, M4A</span>
+            <span id="outputFormatReadout">Output scaffold: WAV</span>
+          </div>
+        </div>
+
+        <label class="field">
+          <span>Preset</span>
+          <select id="presetSelect"></select>
+        </label>
+
+        <label class="field">
+          <span>Target prompt</span>
+          <textarea id="captionInput" rows="7"></textarea>
+        </label>
+
+        <div id="presetSummary" class="summary"></div>
+      </section>
+
+      <section class="panel settings-panel">
+        <div class="panel-heading">
+          <h2>Transition</h2>
+          <span id="actionState" class="mini-state">Ready</span>
+        </div>
+
+        <div class="control-grid">
+          <label class="field">
+            <span>Source context seconds</span>
+            <input id="contextSeconds" type="number" min="1" step="0.5" />
+          </label>
+          <label class="field">
+            <span>Repaint overlap seconds</span>
+            <input id="overlapSeconds" type="number" min="0.5" step="0.5" />
+          </label>
+          <label class="field">
+            <span>New section seconds</span>
+            <input id="newSeconds" type="number" min="1" step="0.5" />
+          </label>
+          <label class="field">
+            <span>BPM</span>
+            <input id="bpmInput" type="number" min="1" step="0.1" placeholder="optional" />
+          </label>
+          <label class="field">
+            <span>Key</span>
+            <input id="keyInput" type="text" placeholder="A minor" />
+          </label>
+          <label class="field">
+            <span>Seed</span>
+            <input id="seedInput" type="number" step="1" placeholder="optional" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Output folder</span>
+          <input id="outputDir" type="text" placeholder="data/scaffolds" />
+        </label>
+
+        <div class="button-row">
+          <button id="generateButton" class="primary-button" type="button">Generate Transition</button>
+          <button id="refreshButton" class="secondary-button" type="button">Refresh Status</button>
+        </div>
+
+        <div class="output-block">
+          <h3>Generation Output</h3>
+          <div id="generationActivity" class="activity-readout">No generation running.</div>
+          <dl id="recentOutput" class="path-list">
+            <dt>Status</dt>
+            <dd>None</dd>
+            <dt>Output</dt>
+            <dd>None</dd>
+          </dl>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Model</h2>
+            <span id="modelState" class="mini-state">Checking</span>
+          </div>
+
+          <label class="field">
+            <span>ACE-Step profile</span>
+            <select id="modelSelect"></select>
+          </label>
+
+          <div id="modelDetails" class="summary"></div>
+          <label class="check-field">
+            <input id="autoInstallModel" type="checkbox" />
+            <span>Install selected model automatically when needed</span>
+          </label>
+          <button id="installModelButton" class="secondary-button full-width" type="button">Install Model</button>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>System</h2>
+            <span id="systemState" class="mini-state">Live</span>
+          </div>
+          <dl id="systemStatus" class="status-list"></dl>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Runtime</h2>
+            <span id="runtimeState" class="mini-state">Checking</span>
+          </div>
+          <div id="runtimeDetails" class="summary"></div>
+          <button id="copyRuntimeCommandButton" class="secondary-button full-width" type="button">Copy Runtime Commands</button>
+        </section>
+
+        <section class="panel logs-panel">
+          <div class="panel-heading">
+            <h2>Logs</h2>
+            <span id="logState" class="mini-state">Local</span>
+          </div>
+          <ol id="logList" class="log-list"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

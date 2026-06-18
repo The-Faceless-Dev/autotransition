@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+.conda/
+
+# Build outputs
+build/
+dist/
+
+# Local/generated project data
+data/input/
+data/output/
+data/generated/
+data/scaffolds/
+data/exports/
+data/cache/
+data/logs/
+data/runtime/
+/models/
+/checkpoints/
+/runtimes/
+
+# Media outputs
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# Keep example media explicitly if added later
+!examples/**/*.wav
+!examples/**/*.mp3
+!examples/**/*.flac
+!examples/**/*.ogg
+!examples/**/*.m4a
