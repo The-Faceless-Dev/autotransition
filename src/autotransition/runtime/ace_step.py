@@ -69,6 +69,12 @@ class RuntimeProcess:
 
 
 @dataclass(frozen=True)
+class PortListener:
+    pid: int | None
+    command_line: str
+
+
+@dataclass(frozen=True)
 class ApiHealthDetail:
     running: bool
     message: str
@@ -213,6 +219,96 @@ def find_runtime_processes(config: RuntimeConfig = RuntimeConfig()) -> list[Runt
         except ValueError:
             continue
     return processes
+
+
+def find_port_listeners(config: RuntimeConfig = RuntimeConfig()) -> list[PortListener]:
+    if sys.platform == "win32":
+        return _find_windows_port_listeners(config)
+    return _find_posix_port_listeners(config)
+
+
+def _find_windows_port_listeners(config: RuntimeConfig) -> list[PortListener]:
+    command = (
+        "$ErrorActionPreference='SilentlyContinue'; "
+        f"$connections = Get-NetTCPConnection -LocalPort {config.api_port} -State Listen; "
+        "$connections | ForEach-Object { "
+        "$process = Get-CimInstance Win32_Process -Filter \"ProcessId=$($_.OwningProcess)\"; "
+        "[PSCustomObject]@{ ProcessId = $_.OwningProcess; CommandLine = $process.CommandLine } "
+        "} | ConvertTo-Json -Compress"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return []
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return []
+    import json
+
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return []
+    rows = data if isinstance(data, list) else [data]
+    listeners: list[PortListener] = []
+    for row in rows:
+        try:
+            pid = int(row["ProcessId"])
+        except (KeyError, TypeError, ValueError):
+            pid = None
+        listeners.append(PortListener(pid=pid, command_line=str(row.get("CommandLine") or "")))
+    return listeners
+
+
+def _find_posix_port_listeners(config: RuntimeConfig) -> list[PortListener]:
+    commands = [
+        ["ss", "-ltnp"],
+        ["lsof", "-nP", f"-iTCP:{config.api_port}", "-sTCP:LISTEN"],
+        ["netstat", "-ltnp"],
+    ]
+    for command in commands:
+        try:
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)
+        except Exception:
+            continue
+        if completed.returncode != 0 or not completed.stdout.strip():
+            continue
+        listeners = _parse_posix_port_listeners(completed.stdout, config.api_port)
+        if listeners:
+            return listeners
+    return []
+
+
+def _parse_posix_port_listeners(output: str, port: int) -> list[PortListener]:
+    listeners: list[PortListener] = []
+    port_suffixes = (f":{port}", f".{port}")
+    for line in output.splitlines():
+        if not any(suffix in line for suffix in port_suffixes):
+            continue
+        if "LISTEN" not in line.upper():
+            continue
+        pid = _extract_pid(line)
+        listeners.append(PortListener(pid=pid, command_line=line.strip()))
+    return listeners
+
+
+def _extract_pid(value: str) -> int | None:
+    import re
+
+    patterns = (r"pid=(\d+)", r"\s(\d+)/[\w.-]+", r"\s(\d+)\s+\w")
+    for pattern in patterns:
+        match = re.search(pattern, value)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
 
 
 def api_health(config: RuntimeConfig = RuntimeConfig()) -> bool:
@@ -455,6 +551,21 @@ def ensure_runtime_api(
             managed_by_current_run=False,
         )
 
+    listeners = find_port_listeners(config)
+    if listeners:
+        listener_text = "; ".join(_format_port_listener(listener) for listener in listeners)
+        return RuntimeStartResult(
+            started=False,
+            already_running=False,
+            api_url=config.api_base_url,
+            pid=listeners[0].pid,
+            message=(
+                f"Port {config.api_port} is already in use, but ACE-Step health is not reachable. "
+                f"Listener(s): {listener_text}. Stop the process using the port or run with --runtime-port."
+            ),
+            managed_by_current_run=False,
+        )
+
     process = start_api_background(config)
     _emit_startup_status(status_callback, f"Started ACE-Step runtime process {process.pid}; waiting for API readiness.")
     status_reporter = _StartupStatusReporter(status_callback)
@@ -533,3 +644,11 @@ class _StartupStatusReporter:
 def _emit_startup_status(callback: StartupStatusCallback | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _format_port_listener(listener: PortListener) -> str:
+    if listener.pid is None:
+        return listener.command_line or "unknown process"
+    if listener.command_line:
+        return f"pid {listener.pid} ({listener.command_line})"
+    return f"pid {listener.pid}"

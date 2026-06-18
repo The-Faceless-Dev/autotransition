@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from autotransition.config import RuntimeConfig
 from autotransition.runtime.ace_step import (
+    PortListener,
     RuntimeProcess,
     api_health,
     api_health_detail,
@@ -12,6 +13,7 @@ from autotransition.runtime.ace_step import (
     build_start_api_command,
     build_uv_install_command,
     ensure_runtime_api,
+    _parse_posix_port_listeners,
     read_runtime_pid,
     resolve_uv_executable,
     runtime_status,
@@ -129,6 +131,17 @@ def test_api_health_detail_reports_unreachable_url(monkeypatch) -> None:
     assert "connection refused" in detail.message
 
 
+def test_parse_posix_port_listeners_reads_ss_output() -> None:
+    output = (
+        "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+        'LISTEN 0 2048 127.0.0.1:8001 0.0.0.0:* users:(("python",pid=4675,fd=7))\n'
+    )
+
+    listeners = _parse_posix_port_listeners(output, 8001)
+
+    assert listeners == [PortListener(pid=4675, command_line='LISTEN 0 2048 127.0.0.1:8001 0.0.0.0:* users:(("python",pid=4675,fd=7))')]
+
+
 def test_ensure_runtime_api_reports_missing_install(tmp_path: Path) -> None:
     config = RuntimeConfig(ace_step_dir=tmp_path / "missing", api_port=65531)
 
@@ -137,6 +150,34 @@ def test_ensure_runtime_api_reports_missing_install(tmp_path: Path) -> None:
     assert not result.started
     assert not result.already_running
     assert "autotransition setup" in result.message
+
+
+def test_ensure_runtime_api_reports_port_conflict(tmp_path: Path, monkeypatch) -> None:
+    runtime_dir = tmp_path / "ACE-Step-1.5"
+    runtime_dir.mkdir()
+    (runtime_dir / "pyproject.toml").write_text("[project]\nname = 'ace-step'\n", encoding="utf-8")
+    config = RuntimeConfig(ace_step_dir=runtime_dir, api_port=8001)
+
+    monkeypatch.setattr(ace_step_runtime, "api_health", lambda config: False)
+    monkeypatch.setattr(ace_step_runtime, "find_runtime_processes", lambda config: [])
+    monkeypatch.setattr(
+        ace_step_runtime,
+        "find_port_listeners",
+        lambda config: [PortListener(pid=4675, command_line="python -m some.server")],
+    )
+    monkeypatch.setattr(
+        ace_step_runtime,
+        "start_api_background",
+        lambda config: (_ for _ in ()).throw(AssertionError("should not start when port is occupied")),
+    )
+
+    result = ensure_runtime_api(config)
+
+    assert not result.started
+    assert not result.already_running
+    assert result.pid == 4675
+    assert "Port 8001 is already in use" in result.message
+    assert "python -m some.server" in result.message
 
 
 def test_runtime_env_disables_hf_transfer_by_default(monkeypatch) -> None:
