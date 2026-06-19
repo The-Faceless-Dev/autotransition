@@ -237,6 +237,63 @@ def test_ui_generate_from_selection_reports_missing_model(tmp_path: Path) -> Non
     assert payload["plan"]["requested_continuation_seconds"] == 5.0
 
 
+def test_ui_generate_from_selection_records_advanced_settings_and_region(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=10000)
+    output_dir = tmp_path / "out"
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/generate/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "model_slug": "acestep-v15-turbo",
+            "output_dir": str(output_dir),
+            "continuation_point_seconds": 4.0,
+            "generation_region": "repaint_existing",
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+            "ace_step": {
+                "inference_steps": 16,
+                "chunk_mask_mode": "auto",
+                "repaint_mode": "aggressive",
+                "repaint_strength": 0.8,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan["generation_region"] == "repaint_existing"
+    assert plan["ace_step_settings"]["inference_steps"] == 16
+    assert plan["ace_step_settings"]["chunk_mask_mode"] == "auto"
+    assert plan["ace_step_settings"]["repaint_mode"] == "aggressive"
+    assert plan["ace_step_settings"]["repaint_strength"] == 0.8
+
+
+def test_ui_generate_from_selection_rejects_existing_repaint_without_enough_audio(tmp_path: Path) -> None:
+    source = make_wav(tmp_path / "song.wav", duration_ms=6000)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/generate/from-selection",
+        json={
+            "source_path": str(source),
+            "preset": "smooth-continuation",
+            "model_slug": "acestep-v15-turbo",
+            "continuation_point_seconds": 4.0,
+            "generation_region": "repaint_existing",
+            "context_seconds": 2.0,
+            "repaint_overlap_seconds": 1.0,
+            "new_section_seconds": 5.0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "not enough source audio" in response.json()["detail"]
+
+
 def test_ui_generate_from_selection_reports_missing_runtime_when_model_ready(tmp_path: Path, monkeypatch) -> None:
     import autotransition.runtime.ace_step as ace_step_runtime
 

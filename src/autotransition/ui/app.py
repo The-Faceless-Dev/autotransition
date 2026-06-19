@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -27,6 +27,7 @@ from autotransition.models import (
     repaint_capable_models,
     resolve_model_status,
 )
+from autotransition.models.acestep_api import _repaint_defaults_for_profile
 from autotransition.models.download import local_model_path
 from autotransition.models.status import InstallState
 from autotransition.pipeline import (
@@ -59,11 +60,27 @@ class ProbeRequest(BaseModel):
 
 class SelectionScaffoldRequest(ScaffoldRequest):
     continuation_point_seconds: float = Field(..., gt=0)
+    generation_region: Literal["extend", "repaint_existing"] = "extend"
+
+
+class AceStepAdvancedSettings(BaseModel):
+    inference_steps: int | None = Field(None, ge=1, le=200)
+    guidance_scale: float | None = Field(None, ge=0)
+    shift: float | None = Field(None, ge=0)
+    chunk_mask_mode: Literal["explicit", "auto"] | None = None
+    repaint_mode: Literal["balanced", "conservative", "aggressive"] | None = None
+    repaint_strength: float | None = Field(None, ge=0, le=1)
+    repaint_latent_crossfade_frames: int | None = Field(None, ge=0, le=200)
+    repaint_wav_crossfade_sec: float | None = Field(None, ge=0, le=10)
+
+    def to_payload(self) -> dict[str, object]:
+        return {key: value for key, value in self.model_dump().items() if value is not None}
 
 
 class GenerateSelectionRequest(SelectionScaffoldRequest):
     model_slug: str = "acestep-v15-turbo"
     auto_install: bool = False
+    ace_step: AceStepAdvancedSettings | None = None
 
 
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
@@ -114,6 +131,14 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         if not source_path.exists() or not source_path.is_file():
             raise HTTPException(status_code=404, detail=f"Source audio not found: {source_path}")
         return FileResponse(source_path)
+
+    @app.get("/api/audio")
+    def get_audio_file(path: str = Query(..., min_length=1)) -> FileResponse:
+        audio_path = Path(path).expanduser()
+        if not audio_path.exists() or not audio_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+        validate_supported_source(audio_path)
+        return FileResponse(audio_path)
 
     @app.post("/api/source/probe")
     def probe_source(request: ProbeRequest) -> dict[str, object]:
@@ -201,6 +226,10 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     "speed_label": profile.speed_label,
                     "vram_guidance": profile.vram_guidance,
                     "default_inference_steps": profile.default_inference_steps,
+                    "repaint_defaults": {
+                        "inference_steps": profile.default_inference_steps,
+                        **_repaint_defaults_for_profile(profile),
+                    },
                     "notes": profile.notes,
                     "status": status.to_dict(),
                 }
@@ -330,6 +359,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     continuation_point_seconds=request.continuation_point_seconds,
                     caption=request.caption or selected.caption,
                     config=config,
+                    generation_region=request.generation_region,
                 )
             )
             ui_log.add(
@@ -344,6 +374,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 tail_end_seconds=plan.tail_end_seconds,
                 blank_seconds=config.new_section_seconds,
                 output_format=plan.audio_format,
+                target_end_seconds=(
+                    request.continuation_point_seconds + config.new_section_seconds
+                    if request.generation_region == "repaint_existing"
+                    else None
+                ),
             )
         except Exception as exc:
             ui_log.add("error", str(exc))
@@ -407,6 +442,8 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     caption=request.caption or selected.caption,
                     config=config,
                     transition_id=generation_id,
+                    generation_region=request.generation_region,
+                    ace_step_settings=request.ace_step.to_payload() if request.ace_step else None,
                 )
             )
             ui_log.add("info", "Preparing internal repaint scaffold for generation.")
@@ -417,6 +454,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 tail_end_seconds=plan.tail_end_seconds,
                 blank_seconds=config.new_section_seconds,
                 output_format=plan.audio_format,
+                target_end_seconds=(
+                    request.continuation_point_seconds + config.new_section_seconds
+                    if request.generation_region == "repaint_existing"
+                    else None
+                ),
             )
         except Exception as exc:
             ui_log.add("error", str(exc))

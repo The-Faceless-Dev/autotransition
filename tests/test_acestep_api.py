@@ -107,6 +107,11 @@ def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch)
         bpm_hint=None,
         key_hint=None,
         seed=None,
+        ace_step_settings={
+            "inference_steps": 12,
+            "repaint_strength": 0.25,
+            "chunk_mask_mode": "auto",
+        },
     )
     calls = []
 
@@ -136,9 +141,10 @@ def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch)
             assert kwargs["data"]["task_type"] == "repaint"
             assert kwargs["data"]["batch_size"] == "1"
             assert kwargs["data"]["thinking"] == "false"
-            assert kwargs["data"]["chunk_mask_mode"] == "explicit"
+            assert kwargs["data"]["inference_steps"] == "12"
+            assert kwargs["data"]["chunk_mask_mode"] == "auto"
             assert kwargs["data"]["repaint_mode"] == "balanced"
-            assert kwargs["data"]["repaint_strength"] == "0.5"
+            assert kwargs["data"]["repaint_strength"] == "0.25"
             assert kwargs["data"]["repaint_wav_crossfade_sec"] == "0.25"
             assert "src_audio" in kwargs["files"]
             filename, file_obj, mime = kwargs["files"]["src_audio"]

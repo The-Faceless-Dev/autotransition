@@ -50,3 +50,22 @@ def test_repaint_scaffold_silence_matches_source_layout(tmp_path: Path) -> None:
     assert scaffold.frame_rate == 48000
     assert scaffold.channels == 2
     assert scaffold.sample_width == 2
+
+
+def test_selection_scaffold_can_include_existing_target_audio(tmp_path: Path) -> None:
+    from pydub import AudioSegment
+
+    source = make_stereo_wav(tmp_path / "source.wav", duration_ms=4000)
+    output = build_selection_scaffold(
+        source_path=source,
+        output_path=tmp_path / "existing.wav",
+        tail_start_seconds=1.0,
+        tail_end_seconds=2.0,
+        blank_seconds=2.0,
+        target_end_seconds=4.0,
+    )
+
+    scaffold = AudioSegment.from_file(output)
+
+    assert len(scaffold) == 3000
+    assert scaffold.channels == 2

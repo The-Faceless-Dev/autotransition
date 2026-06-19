@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from autotransition.config import TransitionConfig
+
+GenerationRegion = Literal["extend", "repaint_existing"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,8 @@ class SourceSelectionRequest:
     caption: str
     config: TransitionConfig
     transition_id: str | None = None
+    generation_region: GenerationRegion = "extend"
+    ace_step_settings: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,8 @@ class SourceSelectionPlan:
     bpm_hint: float | None
     key_hint: str | None
     seed: int | None
+    generation_region: GenerationRegion = "extend"
+    ace_step_settings: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         data = asdict(self)
@@ -68,6 +75,16 @@ def create_source_selection_plan(request: SourceSelectionRequest) -> SourceSelec
             "continuation point is too early for the requested context and repaint overlap "
             f"({tail_seconds:.2f}s required)"
         )
+    if request.generation_region == "repaint_existing":
+        repaint_end = request.continuation_point_seconds + config.new_section_seconds
+        if repaint_end > request.source_duration_seconds:
+            available = request.source_duration_seconds - request.continuation_point_seconds
+            raise ValueError(
+                "not enough source audio after the continuation point to repaint "
+                f"{config.new_section_seconds:.2f}s ({available:.2f}s available)"
+            )
+    elif request.generation_region != "extend":
+        raise ValueError(f"Unknown generation region: {request.generation_region}")
 
     transition_id = request.transition_id or f"selection-{uuid4().hex[:12]}"
     output_dir = config.output.scaffold_dir / transition_id
@@ -94,4 +111,6 @@ def create_source_selection_plan(request: SourceSelectionRequest) -> SourceSelec
         bpm_hint=config.bpm_hint,
         key_hint=config.key_hint,
         seed=config.seed,
+        generation_region=request.generation_region,
+        ace_step_settings=request.ace_step_settings or {},
     )

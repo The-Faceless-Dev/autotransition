@@ -49,6 +49,7 @@ class AceStepApiClient:
             "thinking": False,
         }
         payload.update(_repaint_defaults_for_profile(profile))
+        payload.update(plan.ace_step_settings)
         if plan.seed is not None:
             payload["use_random_seed"] = False
             payload["seed"] = plan.seed

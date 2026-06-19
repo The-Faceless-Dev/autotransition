@@ -7,6 +7,8 @@ const state = {
   toastTimer: null,
   generationPollTimer: null,
   isGenerating: false,
+  advancedDirty: false,
+  generatedResults: [],
 };
 
 const el = {
@@ -34,6 +36,7 @@ const el = {
   continuationSlider: document.querySelector("#continuationSlider"),
   contextRange: document.querySelector("#contextRange"),
   futureRange: document.querySelector("#futureRange"),
+  generationRegion: document.querySelector("#generationRegion"),
   outputDir: document.querySelector("#outputDir"),
   contextSeconds: document.querySelector("#contextSeconds"),
   overlapSeconds: document.querySelector("#overlapSeconds"),
@@ -41,10 +44,19 @@ const el = {
   bpmInput: document.querySelector("#bpmInput"),
   keyInput: document.querySelector("#keyInput"),
   seedInput: document.querySelector("#seedInput"),
+  inferenceSteps: document.querySelector("#inferenceSteps"),
+  guidanceScale: document.querySelector("#guidanceScale"),
+  shiftValue: document.querySelector("#shiftValue"),
+  chunkMaskMode: document.querySelector("#chunkMaskMode"),
+  repaintMode: document.querySelector("#repaintMode"),
+  repaintStrength: document.querySelector("#repaintStrength"),
+  latentCrossfadeFrames: document.querySelector("#latentCrossfadeFrames"),
+  waveCrossfadeSeconds: document.querySelector("#waveCrossfadeSeconds"),
+  resetAceDefaultsButton: document.querySelector("#resetAceDefaultsButton"),
   generateButton: document.querySelector("#generateButton"),
   generationActivity: document.querySelector("#generationActivity"),
   refreshButton: document.querySelector("#refreshButton"),
-  recentOutput: document.querySelector("#recentOutput"),
+  generatedList: document.querySelector("#generatedList"),
   modelSelect: document.querySelector("#modelSelect"),
   modelDetails: document.querySelector("#modelDetails"),
   autoInstallModel: document.querySelector("#autoInstallModel"),
@@ -148,6 +160,26 @@ function applyModel(model) {
     `Local: ${model.status.local_path}`,
   ].join("<br>");
   el.installModelButton.disabled = model.status.state === "ready";
+  if (!state.advancedDirty) {
+    applyAceDefaults(model);
+  }
+}
+
+function setNumeric(node, value) {
+  node.value = value === null || value === undefined ? "" : String(value);
+}
+
+function applyAceDefaults(model) {
+  const defaults = (model && model.repaint_defaults) || {};
+  setNumeric(el.inferenceSteps, defaults.inference_steps);
+  setNumeric(el.guidanceScale, defaults.guidance_scale);
+  setNumeric(el.shiftValue, defaults.shift);
+  el.chunkMaskMode.value = defaults.chunk_mask_mode || "explicit";
+  el.repaintMode.value = defaults.repaint_mode || "balanced";
+  setNumeric(el.repaintStrength, defaults.repaint_strength);
+  setNumeric(el.latentCrossfadeFrames, defaults.repaint_latent_crossfade_frames);
+  setNumeric(el.waveCrossfadeSeconds, defaults.repaint_wav_crossfade_sec);
+  state.advancedDirty = false;
 }
 
 function renderStatus(status) {
@@ -243,18 +275,48 @@ function stopGenerationPolling() {
   }
 }
 
-function renderRecentOutput(result, plan) {
-  el.recentOutput.innerHTML = `
-    <dt>Status</dt><dd>${result.status}</dd>
-    <dt>Message</dt><dd>${result.message}</dd>
-    <dt>Output</dt><dd>${result.generated_audio_path || "No generated audio yet"}</dd>
-    <dt>Details</dt><dd>${result.generated_metadata_path || "No generated metadata yet"}</dd>
-    <dt>Scaffold</dt><dd>${result.scaffold_path}</dd>
-    <dt>Metadata</dt><dd>${result.scaffold_metadata_path}</dd>
-    <dt>Repaint</dt><dd>${plan.repainting_start_seconds}s to end</dd>
-    ${plan.continuation_point_seconds ? `<dt>Source</dt><dd>${formatTime(plan.tail_start_seconds)} to ${formatTime(plan.tail_end_seconds)}</dd>` : ""}
-    <dt>Caption</dt><dd>${plan.caption}</dd>
-  `;
+function renderGeneratedList() {
+  el.generatedList.replaceChildren();
+  if (!state.generatedResults.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No generated audio yet.";
+    el.generatedList.appendChild(empty);
+    return;
+  }
+
+  state.generatedResults.forEach((item, index) => {
+    const { result, plan } = item;
+    const row = document.createElement("article");
+    row.className = "generated-item";
+    const outputPath = result.generated_audio_path || "";
+    const audio = outputPath
+      ? `<audio controls preload="metadata" src="/api/audio?path=${encodeURIComponent(outputPath)}"></audio>`
+      : `<div class="empty-result">No playable audio for this result.</div>`;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${index === 0 ? "Latest" : "Result"} - ${result.status}</strong>
+        <span>${result.model_slug || "model"}</span>
+      </div>
+      ${audio}
+      <dl class="path-list">
+        <dt>Message</dt><dd>${result.message}</dd>
+        <dt>Mode</dt><dd>${plan.generation_region === "repaint_existing" ? "Repaint existing audio" : "Extend after marker"}</dd>
+        <dt>Source</dt><dd>${formatTime(plan.tail_start_seconds)} to ${formatTime(plan.tail_end_seconds)}</dd>
+        <dt>Repaint</dt><dd>${plan.repainting_start_seconds}s to end</dd>
+        <dt>Output</dt><dd>${outputPath || "None"}</dd>
+        <dt>Metadata</dt><dd>${result.generated_metadata_path || result.scaffold_metadata_path}</dd>
+        <dt>Prompt</dt><dd>${plan.caption}</dd>
+      </dl>
+    `;
+    el.generatedList.appendChild(row);
+  });
+}
+
+function addGeneratedResult(result, plan) {
+  state.generatedResults.unshift({ result, plan });
+  state.generatedResults = state.generatedResults.slice(0, 12);
+  renderGeneratedList();
 }
 
 async function loadAll() {
@@ -294,8 +356,12 @@ function updateSelectionReadout() {
   const future = settings.newSeconds || 0;
   const tail = context + overlap;
   const start = continuation - tail;
+  const repaintEnd = continuation + future;
   el.continuationReadout.textContent = `Continue at ${formatTime(continuation)}`;
-  el.futureRange.textContent = `Blank future: ${future.toFixed(1)}s`;
+  el.futureRange.textContent =
+    el.generationRegion.value === "repaint_existing"
+      ? `Repaint existing: ${future.toFixed(1)}s`
+      : `Blank future: ${future.toFixed(1)}s`;
   if (!state.sourceProbe) {
     el.contextRange.textContent = "Context not selected";
     return;
@@ -305,8 +371,27 @@ function updateSelectionReadout() {
     setPill(el.sourceState, "Marker too early", "warn");
     return;
   }
+  if (el.generationRegion.value === "repaint_existing" && repaintEnd > state.sourceProbe.duration_seconds) {
+    const available = Math.max(0, state.sourceProbe.duration_seconds - continuation);
+    el.contextRange.textContent = `${future.toFixed(1)}s requested after marker; ${available.toFixed(1)}s available`;
+    setPill(el.sourceState, "Needs more source", "warn");
+    return;
+  }
   el.contextRange.textContent = `Tail: ${formatTime(start)} to ${formatTime(continuation)} (${tail.toFixed(1)}s)`;
   setPill(el.sourceState, "Source loaded", "ok");
+}
+
+function aceStepSettingsPayload() {
+  return {
+    inference_steps: numericValue(el.inferenceSteps),
+    guidance_scale: numericValue(el.guidanceScale),
+    shift: numericValue(el.shiftValue),
+    chunk_mask_mode: el.chunkMaskMode.value,
+    repaint_mode: el.repaintMode.value,
+    repaint_strength: numericValue(el.repaintStrength),
+    repaint_latent_crossfade_frames: numericValue(el.latentCrossfadeFrames),
+    repaint_wav_crossfade_sec: numericValue(el.waveCrossfadeSeconds),
+  };
 }
 
 async function loadProbeIntoPlayer(sourcePath, probe) {
@@ -384,6 +469,7 @@ async function generateTransition() {
     const payload = {
       source_path: el.sourcePath.value.trim(),
       continuation_point_seconds: Number(el.continuationSlider.value || 0),
+      generation_region: el.generationRegion.value,
       preset: el.presetSelect.value,
       model_slug: state.selectedModel ? state.selectedModel.slug : el.modelSelect.value,
       auto_install: el.autoInstallModel.checked,
@@ -395,12 +481,13 @@ async function generateTransition() {
       bpm: numericValue(el.bpmInput),
       key: el.keyInput.value.trim() || null,
       seed: numericValue(el.seedInput),
+      ace_step: aceStepSettingsPayload(),
     };
     const response = await api("/api/generate/from-selection", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    renderRecentOutput(response.result, response.plan);
+    addGeneratedResult(response.result, response.plan);
     if (response.result.status === "complete") {
       setPill(el.actionState, "Complete", "ok");
       el.generationActivity.innerHTML = "<strong>Complete</strong><br>Transition generated.";
@@ -482,6 +569,7 @@ el.copyRuntimeCommandButton.addEventListener("click", async () => {
   showToast("Setup commands copied");
 });
 el.continuationSlider.addEventListener("input", updateSelectionReadout);
+el.generationRegion.addEventListener("change", updateSelectionReadout);
 el.sourceAudio.addEventListener("timeupdate", () => {
   el.currentTimeReadout.textContent = formatTime(el.sourceAudio.currentTime);
 });
@@ -491,6 +579,31 @@ el.sourceAudio.addEventListener("seeked", () => {
 
 [el.contextSeconds, el.overlapSeconds, el.newSeconds].forEach((node) => {
   node.addEventListener("input", updateSelectionReadout);
+});
+
+[
+  el.inferenceSteps,
+  el.guidanceScale,
+  el.shiftValue,
+  el.chunkMaskMode,
+  el.repaintMode,
+  el.repaintStrength,
+  el.latentCrossfadeFrames,
+  el.waveCrossfadeSeconds,
+].forEach((node) => {
+  node.addEventListener("input", () => {
+    state.advancedDirty = true;
+  });
+  node.addEventListener("change", () => {
+    state.advancedDirty = true;
+  });
+});
+
+el.resetAceDefaultsButton.addEventListener("click", () => {
+  if (state.selectedModel) {
+    applyAceDefaults(state.selectedModel);
+    showToast("ACE-Step defaults restored");
+  }
 });
 
 loadAll().catch((error) => {
