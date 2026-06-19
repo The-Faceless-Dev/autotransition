@@ -85,6 +85,7 @@ def create_source_selection_plan(request: SourceSelectionRequest) -> SourceSelec
             )
     elif request.generation_region != "extend":
         raise ValueError(f"Unknown generation region: {request.generation_region}")
+    repainting_end_seconds = tail_seconds + config.new_section_seconds if request.generation_region == "extend" else -1.0
 
     transition_id = request.transition_id or f"selection-{uuid4().hex[:12]}"
     output_dir = config.output.scaffold_dir / transition_id
@@ -106,7 +107,7 @@ def create_source_selection_plan(request: SourceSelectionRequest) -> SourceSelec
         requested_continuation_seconds=config.new_section_seconds,
         effective_continuation_seconds=None,
         repainting_start_seconds=config.repainting_start_seconds,
-        repainting_end_seconds=-1.0,
+        repainting_end_seconds=repainting_end_seconds,
         audio_format=config.output.audio_format,
         bpm_hint=config.bpm_hint,
         key_hint=config.key_hint,

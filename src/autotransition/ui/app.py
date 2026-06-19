@@ -379,6 +379,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     if request.generation_region == "repaint_existing"
                     else None
                 ),
+                append_silence=request.generation_region != "extend",
             )
         except Exception as exc:
             ui_log.add("error", str(exc))
@@ -459,6 +460,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     if request.generation_region == "repaint_existing"
                     else None
                 ),
+                append_silence=request.generation_region != "extend",
             )
         except Exception as exc:
             ui_log.add("error", str(exc))

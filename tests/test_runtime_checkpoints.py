@@ -15,6 +15,15 @@ def test_checkpoint_has_weights_requires_final_weight_file(tmp_path: Path) -> No
     assert not checkpoint_has_weights(checkpoint)
 
 
+def test_checkpoint_has_weights_accepts_sharded_safetensors(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "acestep-v15-xl-sft"
+    checkpoint.mkdir()
+    (checkpoint / "model-00001-of-00002.safetensors").write_text("weights", encoding="utf-8")
+    (checkpoint / "model.safetensors.index.json").write_text("{}", encoding="utf-8")
+
+    assert checkpoint_has_weights(checkpoint)
+
+
 def test_repair_incomplete_checkpoint_moves_folder(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "ACE-Step-1.5"
     checkpoint = runtime_dir / "checkpoints" / "acestep-v15-base"

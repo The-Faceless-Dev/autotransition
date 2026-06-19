@@ -102,7 +102,7 @@ def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch)
         requested_continuation_seconds=36.0,
         effective_continuation_seconds=None,
         repainting_start_seconds=18.0,
-        repainting_end_seconds=-1.0,
+        repainting_end_seconds=57.0,
         audio_format="wav",
         bpm_hint=None,
         key_hint=None,
@@ -139,6 +139,8 @@ def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch)
             assert "json" not in kwargs
             assert "src_audio_path" not in kwargs["data"]
             assert kwargs["data"]["task_type"] == "repaint"
+            assert kwargs["data"]["repainting_start"] == "18.0"
+            assert kwargs["data"]["repainting_end"] == "57.0"
             assert kwargs["data"]["batch_size"] == "1"
             assert kwargs["data"]["thinking"] == "false"
             assert kwargs["data"]["inference_steps"] == "12"

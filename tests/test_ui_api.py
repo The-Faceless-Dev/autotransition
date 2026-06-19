@@ -133,6 +133,8 @@ def test_ui_source_audio_endpoint_serves_file(tmp_path: Path) -> None:
 
 
 def test_ui_selection_scaffold_uses_configured_future_length(tmp_path: Path) -> None:
+    from pydub import AudioSegment
+
     source = make_wav(tmp_path / "song.wav", duration_ms=6000)
     output_dir = tmp_path / "out"
     client = TestClient(create_app(models_dir=tmp_path / "models"))
@@ -157,7 +159,9 @@ def test_ui_selection_scaffold_uses_configured_future_length(tmp_path: Path) -> 
     assert plan["source_format"] == "WAV"
     assert plan["audio_format"] == "wav"
     assert plan["requested_continuation_seconds"] == 5.0
+    assert plan["repainting_end_seconds"] == 8.0
     assert Path(plan["scaffold_path"]).exists()
+    assert len(AudioSegment.from_file(plan["scaffold_path"])) == 3000
 
 
 def test_ui_selection_scaffold_rejects_early_marker(tmp_path: Path) -> None:
@@ -235,6 +239,7 @@ def test_ui_generate_from_selection_reports_missing_model(tmp_path: Path) -> Non
     assert "not installed" in payload["result"]["message"]
     assert Path(payload["result"]["scaffold_path"]).exists()
     assert payload["plan"]["requested_continuation_seconds"] == 5.0
+    assert payload["plan"]["repainting_end_seconds"] == 8.0
 
 
 def test_ui_generate_from_selection_records_advanced_settings_and_region(tmp_path: Path) -> None:
@@ -266,6 +271,7 @@ def test_ui_generate_from_selection_records_advanced_settings_and_region(tmp_pat
     assert response.status_code == 200
     plan = response.json()["plan"]
     assert plan["generation_region"] == "repaint_existing"
+    assert plan["repainting_end_seconds"] == -1.0
     assert plan["ace_step_settings"]["inference_steps"] == 16
     assert plan["ace_step_settings"]["chunk_mask_mode"] == "auto"
     assert plan["ace_step_settings"]["repaint_mode"] == "aggressive"

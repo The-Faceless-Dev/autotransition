@@ -34,6 +34,25 @@ def test_selection_scaffold_silence_matches_source_layout(tmp_path: Path) -> Non
     assert scaffold.sample_width == 2
 
 
+def test_selection_scaffold_can_write_tail_only_for_outpaint(tmp_path: Path) -> None:
+    from pydub import AudioSegment
+
+    source = make_stereo_wav(tmp_path / "source.wav", duration_ms=4000)
+    output = build_selection_scaffold(
+        source_path=source,
+        output_path=tmp_path / "outpaint.wav",
+        tail_start_seconds=1.0,
+        tail_end_seconds=2.0,
+        blank_seconds=2.0,
+        append_silence=False,
+    )
+
+    scaffold = AudioSegment.from_file(output)
+
+    assert len(scaffold) == 1000
+    assert scaffold.channels == 2
+
+
 def test_repaint_scaffold_silence_matches_source_layout(tmp_path: Path) -> None:
     from pydub import AudioSegment
 

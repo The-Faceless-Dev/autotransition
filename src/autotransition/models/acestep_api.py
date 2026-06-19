@@ -39,7 +39,7 @@ class AceStepApiClient:
         payload: dict[str, Any] = {
             "task_type": "repaint",
             "repainting_start": plan.repainting_start_seconds,
-            "repainting_end": -1,
+            "repainting_end": plan.repainting_end_seconds,
             "prompt": plan.caption,
             "model": profile.slug,
             "audio_duration": plan.context_seconds + plan.repaint_overlap_seconds + plan.requested_continuation_seconds,

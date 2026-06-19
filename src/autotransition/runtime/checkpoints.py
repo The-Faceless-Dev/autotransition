@@ -18,6 +18,15 @@ WEIGHT_FILENAMES = (
     "tf_model.h5",
     "flax_model.msgpack",
 )
+WEIGHT_PATTERNS = (
+    "*.safetensors",
+    "*.bin",
+    "*.ckpt",
+)
+WEIGHT_INDEX_FILENAMES = (
+    "model.safetensors.index.json",
+    "pytorch_model.bin.index.json",
+)
 
 
 @dataclass(frozen=True)
@@ -32,7 +41,17 @@ class CheckpointRepairResult:
 def checkpoint_has_weights(path: Path) -> bool:
     if not path.is_dir():
         return False
-    return any((path / filename).exists() for filename in WEIGHT_FILENAMES)
+    if any((path / filename).exists() for filename in WEIGHT_FILENAMES + WEIGHT_INDEX_FILENAMES):
+        return True
+    return any(file.is_file() for pattern in WEIGHT_PATTERNS for file in path.glob(pattern))
+
+
+def checkpoint_missing_weights_message(path: Path) -> str:
+    expected = ", ".join((*WEIGHT_FILENAMES, *WEIGHT_INDEX_FILENAMES, *WEIGHT_PATTERNS))
+    found = ", ".join(sorted(file.name for file in path.iterdir() if file.is_file())[:12])
+    if not found:
+        found = "no top-level files"
+    return f"No top-level checkpoint weights found in {path}. Expected one of: {expected}. Found: {found}."
 
 
 def repair_incomplete_checkpoint(
@@ -80,5 +99,5 @@ def repair_incomplete_checkpoint(
         checkpoint_path=checkpoint_path,
         repaired=True,
         quarantine_path=quarantine_path,
-        message=f"Incomplete checkpoint moved to {quarantine_path}.",
+        message=f"{checkpoint_missing_weights_message(quarantine_path)} Incomplete checkpoint moved to {quarantine_path}.",
     )

@@ -31,6 +31,8 @@ def test_source_selection_plan_extracts_tail_before_marker(tmp_path: Path) -> No
     assert plan.source_format == "WAV"
     assert plan.requested_continuation_seconds == 24.0
     assert plan.generation_region == "extend"
+    assert plan.repainting_start_seconds == 10.0
+    assert plan.repainting_end_seconds == 36.0
     assert plan.scaffold_path == tmp_path / "scaffolds" / "selected" / "scaffold.wav"
 
 
@@ -72,6 +74,7 @@ def test_source_selection_plan_supports_repainting_existing_audio(tmp_path: Path
     assert plan.generation_region == "repaint_existing"
     assert plan.ace_step_settings == {"repaint_strength": 0.35}
     assert plan.requested_continuation_seconds == 24.0
+    assert plan.repainting_end_seconds == -1.0
 
 
 def test_source_selection_rejects_existing_repaint_beyond_song_end() -> None:

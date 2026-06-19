@@ -303,7 +303,7 @@ function renderGeneratedList() {
         <dt>Message</dt><dd>${result.message}</dd>
         <dt>Mode</dt><dd>${plan.generation_region === "repaint_existing" ? "Repaint existing audio" : "Extend after marker"}</dd>
         <dt>Source</dt><dd>${formatTime(plan.tail_start_seconds)} to ${formatTime(plan.tail_end_seconds)}</dd>
-        <dt>Repaint</dt><dd>${plan.repainting_start_seconds}s to end</dd>
+        <dt>Repaint</dt><dd>${plan.repainting_start_seconds}s to ${plan.repainting_end_seconds > 0 ? `${plan.repainting_end_seconds}s` : "end"}</dd>
         <dt>Output</dt><dd>${outputPath || "None"}</dd>
         <dt>Metadata</dt><dd>${result.generated_metadata_path || result.scaffold_metadata_path}</dd>
         <dt>Prompt</dt><dd>${plan.caption}</dd>
@@ -361,7 +361,7 @@ function updateSelectionReadout() {
   el.futureRange.textContent =
     el.generationRegion.value === "repaint_existing"
       ? `Repaint existing: ${future.toFixed(1)}s`
-      : `Blank future: ${future.toFixed(1)}s`;
+      : `Outpaint future: ${future.toFixed(1)}s`;
   if (!state.sourceProbe) {
     el.contextRange.textContent = "Context not selected";
     return;
