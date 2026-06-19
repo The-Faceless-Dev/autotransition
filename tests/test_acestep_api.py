@@ -230,3 +230,75 @@ def test_repaint_initializes_when_model_list_is_non_json(tmp_path: Path, monkeyp
 
     assert result.output_path.read_bytes() == b"generated"
     assert any(call[1].endswith("/v1/init") for call in calls)
+
+
+def test_repaint_wraps_init_timeout_as_api_error(tmp_path: Path, monkeypatch) -> None:
+    scaffold = tmp_path / "scaffold.wav"
+    scaffold.write_bytes(b"audio")
+    plan = SourceSelectionPlan(
+        transition_id="test-generation",
+        source_path=tmp_path / "source.mp3",
+        source_extension=".mp3",
+        source_format="MP3",
+        source_duration_seconds=60.0,
+        continuation_point_seconds=30.0,
+        tail_start_seconds=9.0,
+        tail_end_seconds=30.0,
+        scaffold_path=scaffold,
+        metadata_path=tmp_path / "metadata.json",
+        caption="cinematic horror",
+        context_seconds=18.0,
+        repaint_overlap_seconds=3.0,
+        new_section_seconds=36.0,
+        requested_continuation_seconds=36.0,
+        effective_continuation_seconds=None,
+        repainting_start_seconds=18.0,
+        repainting_end_seconds=-1.0,
+        audio_format="wav",
+        bpm_hint=None,
+        key_hint=None,
+        seed=None,
+    )
+
+    class TimeoutException(Exception):
+        pass
+
+    class HTTPError(Exception):
+        pass
+
+    class Response:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"data": {"models": []}}
+
+    def fake_get(url, **kwargs):
+        return Response()
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/v1/init"):
+            assert kwargs["timeout"] == RuntimeConfig().generation_timeout_seconds
+            raise TimeoutException("timed out")
+        return Response()
+
+    fake_httpx = SimpleNamespace(
+        get=fake_get,
+        post=fake_post,
+        TimeoutException=TimeoutException,
+        HTTPError=HTTPError,
+    )
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    try:
+        AceStepApiClient(RuntimeConfig()).repaint(
+            plan=plan,
+            profile=get_model_profile("acestep-v15-turbo"),
+            save_dir=tmp_path / "generated",
+        )
+    except AceStepApiError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected AceStepApiError")
+
+    assert "v1/init timed out" in message

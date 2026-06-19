@@ -58,11 +58,13 @@ class AceStepApiClient:
             payload["key_scale"] = plan.key_hint
 
         with plan.scaffold_path.open("rb") as scaffold_file:
-            release = httpx.post(
+            release = _request(
+                "post",
                 f"{self.config.api_base_url}/release_task",
+                "release_task",
                 data=_stringify_form_fields(payload),
                 files={"src_audio": (plan.scaffold_path.name, scaffold_file, "audio/wav")},
-                timeout=self.config.api_timeout_seconds,
+                timeout=self.config.generation_timeout_seconds,
             )
         _raise_api_status(release, "release_task")
         release_body = _response_json(release, "release_task")
@@ -75,10 +77,12 @@ class AceStepApiClient:
 
         deadline = time.monotonic() + self.config.generation_timeout_seconds
         while time.monotonic() < deadline:
-            query = httpx.post(
+            query = _request(
+                "post",
                 f"{self.config.api_base_url}/query_result",
+                "query_result",
                 json={"task_id_list": [task_id]},
-                timeout=self.config.api_timeout_seconds,
+                timeout=self.config.generation_timeout_seconds,
             )
             _raise_api_status(query, "query_result")
             query_body = _response_json(query, "query_result")
@@ -109,8 +113,10 @@ class AceStepApiClient:
         output_path = save_dir / f"{task_id}.wav"
         metadata_path = save_dir / f"{task_id}.json"
 
-        response = httpx.get(
+        response = _request(
+            "get",
             f"{self.config.api_base_url}/v1/audio",
+            "v1/audio",
             params={"path": audio_path},
             timeout=self.config.generation_timeout_seconds,
         )
@@ -126,7 +132,12 @@ class AceStepApiClient:
 
         body: dict[str, Any] = {}
         try:
-            models = httpx.get(f"{self.config.api_base_url}/v1/models", timeout=self.config.api_timeout_seconds)
+            models = _request(
+                "get",
+                f"{self.config.api_base_url}/v1/models",
+                "v1/models",
+                timeout=self.config.api_timeout_seconds,
+            )
             _raise_api_status(models, "v1/models")
             body = _response_json(models, "v1/models")
         except AceStepApiError as exc:
@@ -146,8 +157,10 @@ class AceStepApiClient:
         if repair.repaired:
             print(f"[Autotransition] {repair.message}")
 
-        init = httpx.post(
+        init = _request(
+            "post",
             f"{self.config.api_base_url}/v1/init",
+            "v1/init",
             json={"model": profile.slug, "init_llm": False},
             timeout=self.config.generation_timeout_seconds,
         )
@@ -265,6 +278,17 @@ def _raise_api_status(response: Any, operation: str) -> None:
     url = getattr(request, "url", "")
     target = f" {method} {url}" if method and url else ""
     raise AceStepApiError(f"ACE-Step {operation}{target} failed with HTTP {response.status_code}: {detail}")
+
+
+def _request(method: str, url: str, operation: str, **kwargs: Any) -> Any:
+    import httpx
+
+    try:
+        return getattr(httpx, method)(url, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise AceStepApiError(f"ACE-Step {operation} timed out while calling {method.upper()} {url}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise AceStepApiError(f"ACE-Step {operation} request failed while calling {method.upper()} {url}: {exc}") from exc
 
 
 def _response_json(response: Any, operation: str) -> dict[str, Any]:
