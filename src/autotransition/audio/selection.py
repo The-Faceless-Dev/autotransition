@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from autotransition.audio.formats import validate_supported_source
+from autotransition.audio.segments import matching_silence
 
 
 def build_selection_scaffold(
@@ -43,7 +44,7 @@ def build_selection_scaffold(
     end_ms = int(tail_end_seconds * 1000)
     blank_ms = int(blank_seconds * 1000)
     selected_tail = source[start_ms:end_ms]
-    scaffold = selected_tail + AudioSegment.silent(duration=blank_ms, frame_rate=source.frame_rate)
+    scaffold = selected_tail + matching_silence(selected_tail, blank_ms)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scaffold.export(output_path, format=output_format)

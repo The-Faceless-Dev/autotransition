@@ -245,22 +245,24 @@ def _stringify_form_fields(payload: dict[str, Any]) -> dict[str, str]:
 
 def _repaint_defaults_for_profile(profile: ModelProfile) -> dict[str, Any]:
     is_turbo = "turbo" in profile.slug
+    common = {
+        "infer_method": "ode",
+        "chunk_mask_mode": "explicit",
+        "repaint_mode": "balanced",
+        "repaint_strength": 0.5,
+    }
     if is_turbo:
         return {
-            "infer_method": "ode",
+            **common,
             "guidance_scale": 1.0,
             "shift": 3.0,
-            "repaint_mode": "balanced",
-            "repaint_strength": 0.45,
             "repaint_latent_crossfade_frames": 16,
             "repaint_wav_crossfade_sec": 0.25,
         }
     return {
-        "infer_method": "ode",
+        **common,
         "guidance_scale": 7.0,
         "shift": 3.0,
-        "repaint_mode": "balanced",
-        "repaint_strength": 0.3,
         "repaint_latent_crossfade_frames": 24,
         "repaint_wav_crossfade_sec": 0.5,
     }
