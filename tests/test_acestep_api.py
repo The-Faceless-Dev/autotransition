@@ -6,8 +6,9 @@ from autotransition.config import RuntimeConfig
 from autotransition.models.acestep_api import (
     AceStepApiClient,
     AceStepApiError,
-    DIT_INSTRUCTION,
     DEFAULT_LM_MODEL_PATH,
+    DEFAULT_TEXT2MUSIC_BPM,
+    DEFAULT_TEXT2MUSIC_KEY_SCALE,
     _extract_audio_path,
     _extract_task_result,
     _raise_api_status,
@@ -263,10 +264,8 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             assert payload["thinking"] is True
             assert payload["prompt"] == "instrumental cinematic horror"
             assert payload["lyrics"] == "[Instrumental]"
-            assert payload["vocal_language"] == "unknown"
             assert payload["audio_duration"] == 36.0
             assert payload["audio_format"] == "flac"
-            assert payload["instruction"] == DIT_INSTRUCTION
             assert payload["time_signature"] == "4"
             assert payload["lm_model_path"] == DEFAULT_LM_MODEL_PATH
             assert payload["use_random_seed"] is False
@@ -275,17 +274,19 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             assert payload["key_scale"] == "A minor"
             assert payload["inference_steps"] == 16
             assert payload["guidance_scale"] == 2.0
-            assert payload["infer_method"] == "ode"
             assert payload["use_format"] is False
-            assert payload["use_tiled_decode"] is True
-            assert payload["constrained_decoding"] is True
-            assert payload["use_cot_caption"] is False
-            assert payload["use_cot_language"] is False
-            assert payload["allow_lm_batch"] is True
             assert payload["lm_temperature"] == 0.85
             assert payload["lm_cfg_scale"] == 2.5
             assert payload["lm_top_p"] == 0.9
             assert payload["lm_negative_prompt"] == "NO USER INPUT"
+            assert "vocal_language" not in payload
+            assert "instruction" not in payload
+            assert "infer_method" not in payload
+            assert "use_tiled_decode" not in payload
+            assert "constrained_decoding" not in payload
+            assert "use_cot_caption" not in payload
+            assert "use_cot_language" not in payload
+            assert "allow_lm_batch" not in payload
             assert "chunk_mask_mode" not in payload
             assert "repaint_strength" not in payload
             return Response({"data": {"task_id": "task-1"}})
@@ -308,6 +309,81 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
     assert (tmp_path / "generated" / "ace-release-response.json").exists()
     assert (tmp_path / "generated" / "ace-query-response-final.json").exists()
     assert any(call[1].endswith("/v1/init") for call in calls)
+
+
+def test_text2music_uses_working_bpm_and_key_defaults_when_ui_omits_them(tmp_path: Path, monkeypatch) -> None:
+    plan = SourceSelectionPlan(
+        transition_id="test-generation",
+        source_path=tmp_path / "source.mp3",
+        source_extension=".mp3",
+        source_format="MP3",
+        source_duration_seconds=60.0,
+        continuation_point_seconds=30.0,
+        tail_start_seconds=12.0,
+        tail_end_seconds=30.0,
+        scaffold_path=tmp_path / "scaffold.wav",
+        metadata_path=tmp_path / "metadata.json",
+        caption="instrumental cinematic horror",
+        context_seconds=18.0,
+        repaint_overlap_seconds=0.0,
+        new_section_seconds=30.0,
+        requested_continuation_seconds=30.0,
+        effective_continuation_seconds=None,
+        repainting_start_seconds=18.0,
+        repainting_end_seconds=48.0,
+        audio_format="wav",
+        bpm_hint=None,
+        key_hint=None,
+        seed=None,
+    )
+
+    class Response:
+        def __init__(self, body, status_code=200, content=b"") -> None:
+            self._body = body
+            self.status_code = status_code
+            self.content = content
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/v1/model_inventory"):
+            return Response(
+                {
+                    "data": {
+                        "models": [{"name": "acestep-v15-xl-base", "is_loaded": True}],
+                        "lm_models": [{"name": DEFAULT_LM_MODEL_PATH, "is_loaded": True}],
+                        "loaded_lm_model": DEFAULT_LM_MODEL_PATH,
+                        "llm_initialized": True,
+                    }
+                }
+            )
+        if url.endswith("/v1/audio"):
+            return Response({}, content=b"generated")
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/release_task"):
+            payload = kwargs["json"]
+            assert payload["bpm"] == DEFAULT_TEXT2MUSIC_BPM
+            assert payload["key_scale"] == DEFAULT_TEXT2MUSIC_KEY_SCALE
+            assert payload["audio_duration"] == 30.0
+            return Response({"data": {"task_id": "task-1"}})
+        if url.endswith("/query_result"):
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "generated.flac"}]})
+        return Response({})
+
+    fake_httpx = SimpleNamespace(get=fake_get, post=fake_post)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    result = AceStepApiClient(RuntimeConfig()).text2music(
+        plan=plan,
+        profile=get_model_profile("acestep-v15-xl-base"),
+        save_dir=tmp_path / "generated",
+    )
+
+    assert result.output_path.read_bytes() == b"generated"
 
 
 def test_text2music_skips_init_when_dit_and_lm_are_loaded(tmp_path: Path, monkeypatch) -> None:

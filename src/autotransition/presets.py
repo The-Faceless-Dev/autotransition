@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from autotransition.config import TransitionConfig
 
 
+WORKING_ACE_STEP_PROMPT = (
+    "suspenseful cinematic horror theme, dark ambient strings, low percussion, "
+    "tense atmosphere, instrumental"
+)
+
+
 @dataclass(frozen=True)
 class TransitionPreset:
     """A reusable transition style with defaults users can override."""
@@ -23,11 +29,8 @@ PRESETS: dict[str, TransitionPreset] = {
         slug="smooth-continuation",
         name="Smooth continuation",
         description="Preserve the current groove and continue naturally into the next section.",
-        caption=(
-            "Continue from the existing ending. Keep the same groove, energy, "
-            "tempo, and key at first, then develop into a polished next section."
-        ),
-        config=TransitionConfig(context_seconds=18.0, repaint_overlap_seconds=0.0, new_section_seconds=36.0),
+        caption=WORKING_ACE_STEP_PROMPT,
+        config=TransitionConfig(context_seconds=18.0, repaint_overlap_seconds=0.0, new_section_seconds=30.0),
     ),
     "energy-build": TransitionPreset(
         slug="energy-build",

@@ -15,8 +15,9 @@ from autotransition.models.registry import ModelProfile
 from autotransition.pipeline import SourceSelectionPlan
 
 
-DIT_INSTRUCTION = "Fill the audio semantic mask based on the given conditions:"
 DEFAULT_LM_MODEL_PATH = "acestep-5Hz-lm-1.7B"
+DEFAULT_TEXT2MUSIC_BPM = 120
+DEFAULT_TEXT2MUSIC_KEY_SCALE = "C minor"
 
 
 class AceStepApiError(RuntimeError):
@@ -78,22 +79,16 @@ class AceStepApiClient:
             "task_type": "text2music",
             "prompt": plan.caption,
             "lyrics": "[Instrumental]",
-            "vocal_language": "unknown",
             "model": profile.slug,
             "audio_duration": plan.requested_continuation_seconds,
             "audio_format": _raw_text2music_audio_format(plan.audio_format),
             "batch_size": 1,
             "inference_steps": profile.default_inference_steps,
             "thinking": True,
-            "instruction": DIT_INSTRUCTION,
             "use_format": False,
             "time_signature": "4",
-            "infer_method": "ode",
-            "use_tiled_decode": True,
-            "constrained_decoding": True,
-            "use_cot_caption": False,
-            "use_cot_language": False,
-            "allow_lm_batch": True,
+            "bpm": DEFAULT_TEXT2MUSIC_BPM,
+            "key_scale": DEFAULT_TEXT2MUSIC_KEY_SCALE,
             "lm_model_path": lm_model_path,
             "lm_temperature": 0.85,
             "lm_cfg_scale": 2.5,
@@ -420,18 +415,9 @@ _TEXT2MUSIC_SETTING_ALLOWLIST = {
     "inference_steps",
     "guidance_scale",
     "shift",
-    "instruction",
-    "time_signature",
-    "infer_method",
-    "use_tiled_decode",
-    "constrained_decoding",
-    "use_cot_caption",
-    "use_cot_language",
-    "allow_lm_batch",
     "lm_model_path",
     "lm_temperature",
     "lm_cfg_scale",
-    "lm_top_k",
     "lm_top_p",
     "lm_negative_prompt",
 }

@@ -112,6 +112,8 @@ function applyPreset(preset) {
   el.captionInput.value = preset.caption;
   el.contextSeconds.value = preset.config.context_seconds;
   el.newSeconds.value = preset.config.new_section_seconds;
+  if (!el.bpmInput.value) el.bpmInput.value = "120";
+  if (!el.keyInput.value.trim()) el.keyInput.value = "C minor";
   el.presetSummary.innerHTML = `<strong>${preset.name}</strong><br>${preset.description}`;
   updateSelectionReadout();
 }
