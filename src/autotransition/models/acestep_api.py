@@ -15,6 +15,11 @@ from autotransition.models.registry import ModelProfile
 from autotransition.pipeline import SourceSelectionPlan
 
 
+DIT_INSTRUCTION = "Fill the audio semantic mask based on the given conditions:"
+LM_AUDIO_CODE_INSTRUCTION = "Generate audio semantic tokens based on the given conditions:"
+DEFAULT_LM_MODEL_PATH = "acestep-5Hz-lm-1.7B"
+
+
 class AceStepApiError(RuntimeError):
     """Raised when ACE-Step API generation fails."""
 
@@ -68,7 +73,8 @@ class AceStepApiClient:
             )
 
     def text2music(self, plan: SourceSelectionPlan, profile: ModelProfile, save_dir: Path) -> RepaintResult:
-        self._ensure_model(profile, init_llm=True)
+        lm_model_path = _configured_lm_model_path(plan, profile)
+        self._ensure_model(profile, init_llm=True, lm_model_path=lm_model_path)
         payload: dict[str, Any] = {
             "task_type": "text2music",
             "prompt": plan.caption,
@@ -80,21 +86,23 @@ class AceStepApiClient:
             "batch_size": 1,
             "inference_steps": profile.default_inference_steps,
             "thinking": True,
-            "use_format": True,
+            "instruction": LM_AUDIO_CODE_INSTRUCTION,
+            "use_format": False,
             "time_signature": "4",
             "infer_method": "ode",
             "use_tiled_decode": True,
             "constrained_decoding": True,
-            "use_cot_caption": True,
-            "use_cot_language": True,
+            "use_cot_caption": False,
+            "use_cot_language": False,
             "allow_lm_batch": True,
-            "lm_temperature": 0.85,
+            "lm_model_path": lm_model_path,
+            "lm_temperature": 1.0,
             "lm_cfg_scale": 2.5,
             "lm_top_p": 0.9,
             "lm_negative_prompt": "NO USER INPUT",
         }
         payload.update(_text2music_defaults_for_profile(profile))
-        payload.update(_filter_settings(plan.ace_step_settings, {"inference_steps", "guidance_scale", "shift"}))
+        payload.update(_filter_settings(plan.ace_step_settings, _TEXT2MUSIC_SETTING_ALLOWLIST))
         if plan.seed is not None:
             payload["use_random_seed"] = False
             payload["seed"] = plan.seed
@@ -199,7 +207,12 @@ class AceStepApiClient:
 
         return RepaintResult(output_path=output_path, metadata_path=metadata_path, model_name="ACE-Step API")
 
-    def _ensure_model(self, profile: ModelProfile, init_llm: bool = False) -> None:
+    def _ensure_model(
+        self,
+        profile: ModelProfile,
+        init_llm: bool = False,
+        lm_model_path: str | None = None,
+    ) -> None:
         import httpx
         from autotransition.runtime.checkpoints import repair_incomplete_checkpoint
 
@@ -230,11 +243,15 @@ class AceStepApiClient:
         if repair.repaired:
             print(f"[Autotransition] {repair.message}")
 
+        init_payload: dict[str, Any] = {"model": profile.slug, "init_llm": init_llm}
+        if init_llm and lm_model_path:
+            init_payload["lm_model_path"] = lm_model_path
+
         init = _request(
             "post",
             f"{self.config.api_base_url}/v1/init",
             "v1/init",
-            json={"model": profile.slug, "init_llm": init_llm},
+            json=init_payload,
             timeout=self.config.generation_timeout_seconds,
         )
         _raise_api_status(init, "v1/init")
@@ -358,6 +375,27 @@ def _filter_settings(settings: dict[str, object], allowed: set[str]) -> dict[str
     return {key: value for key, value in settings.items() if key in allowed}
 
 
+_TEXT2MUSIC_SETTING_ALLOWLIST = {
+    "inference_steps",
+    "guidance_scale",
+    "shift",
+    "instruction",
+    "time_signature",
+    "infer_method",
+    "use_tiled_decode",
+    "constrained_decoding",
+    "use_cot_caption",
+    "use_cot_language",
+    "allow_lm_batch",
+    "lm_model_path",
+    "lm_temperature",
+    "lm_cfg_scale",
+    "lm_top_k",
+    "lm_top_p",
+    "lm_negative_prompt",
+}
+
+
 def _repaint_defaults_for_profile(profile: ModelProfile) -> dict[str, Any]:
     is_turbo = "turbo" in profile.slug
     common = {
@@ -393,6 +431,18 @@ def _text2music_defaults_for_profile(profile: ModelProfile) -> dict[str, Any]:
         "guidance_scale": 7.0,
         "shift": 3.0,
     }
+
+
+def _lm_model_path_for_profile(profile: ModelProfile) -> str:
+    return DEFAULT_LM_MODEL_PATH
+
+
+def _configured_lm_model_path(plan: SourceSelectionPlan, profile: ModelProfile) -> str:
+    configured = plan.ace_step_settings.get("lm_model_path")
+    if configured is None:
+        return _lm_model_path_for_profile(profile)
+    configured_text = str(configured).strip()
+    return configured_text or _lm_model_path_for_profile(profile)
 
 
 def _raise_api_status(response: Any, operation: str) -> None:

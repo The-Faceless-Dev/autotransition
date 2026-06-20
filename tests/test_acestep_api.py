@@ -6,6 +6,8 @@ from autotransition.config import RuntimeConfig
 from autotransition.models.acestep_api import (
     AceStepApiClient,
     AceStepApiError,
+    DEFAULT_LM_MODEL_PATH,
+    LM_AUDIO_CODE_INSTRUCTION,
     _extract_audio_path,
     _extract_task_result,
     _raise_api_status,
@@ -88,6 +90,15 @@ def test_text2music_defaults_do_not_include_repaint_controls() -> None:
     assert defaults["guidance_scale"] == 1.0
     assert "chunk_mask_mode" not in defaults
     assert "repaint_strength" not in defaults
+
+
+def test_base_profile_keeps_non_turbo_step_default() -> None:
+    profile = get_model_profile("acestep-v15-base")
+    defaults = _text2music_defaults_for_profile(profile)
+
+    assert profile.default_inference_steps == 64
+    assert defaults["guidance_scale"] == 7.0
+    assert defaults["shift"] == 3.0
 
 
 def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch) -> None:
@@ -238,7 +249,11 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
     def fake_post(url, **kwargs):
         calls.append(("post", url, kwargs))
         if url.endswith("/v1/init"):
-            assert kwargs["json"] == {"model": "acestep-v15-turbo", "init_llm": True}
+            assert kwargs["json"] == {
+                "model": "acestep-v15-turbo",
+                "init_llm": True,
+                "lm_model_path": DEFAULT_LM_MODEL_PATH,
+            }
             return Response({"data": {"loaded_model": "acestep-v15-turbo", "llm_initialized": True}})
         if url.endswith("/release_task"):
             assert "files" not in kwargs or kwargs["files"] is None
@@ -246,13 +261,14 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             payload = kwargs["json"]
             assert payload["task_type"] == "text2music"
             assert payload["thinking"] is True
-            assert payload["use_format"] is True
             assert payload["prompt"] == "instrumental cinematic horror"
             assert payload["lyrics"] == "[Instrumental]"
             assert payload["vocal_language"] == "unknown"
             assert payload["audio_duration"] == 36.0
             assert payload["audio_format"] == "flac"
+            assert payload["instruction"] == LM_AUDIO_CODE_INSTRUCTION
             assert payload["time_signature"] == "4"
+            assert payload["lm_model_path"] == DEFAULT_LM_MODEL_PATH
             assert payload["use_random_seed"] is False
             assert payload["seed"] == 42
             assert payload["bpm"] == 120
@@ -260,12 +276,13 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             assert payload["inference_steps"] == 16
             assert payload["guidance_scale"] == 2.0
             assert payload["infer_method"] == "ode"
+            assert payload["use_format"] is False
             assert payload["use_tiled_decode"] is True
             assert payload["constrained_decoding"] is True
-            assert payload["use_cot_caption"] is True
-            assert payload["use_cot_language"] is True
+            assert payload["use_cot_caption"] is False
+            assert payload["use_cot_language"] is False
             assert payload["allow_lm_batch"] is True
-            assert payload["lm_temperature"] == 0.85
+            assert payload["lm_temperature"] == 1.0
             assert payload["lm_cfg_scale"] == 2.5
             assert payload["lm_top_p"] == 0.9
             assert payload["lm_negative_prompt"] == "NO USER INPUT"
@@ -336,6 +353,7 @@ def test_text2music_fails_when_lm_init_is_not_confirmed(tmp_path: Path, monkeypa
 
     def fake_post(url, **kwargs):
         if url.endswith("/v1/init"):
+            assert kwargs["json"]["lm_model_path"] == DEFAULT_LM_MODEL_PATH
             return Response({"data": {"loaded_model": "acestep-v15-turbo", "llm_initialized": False}})
         raise AssertionError("generation should not start when LM init is incomplete")
 
