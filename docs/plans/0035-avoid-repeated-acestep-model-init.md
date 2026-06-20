@@ -8,7 +8,8 @@ The current model check also treats installed models from `/v1/models` as availa
 
 ## Approach
 
-- Parse `/v1/models` as runtime inventory, distinguishing installed models from loaded models.
+- Parse `/v1/model_inventory` as runtime inventory, distinguishing installed models from loaded models.
+- Treat `/v1/models` as OpenRouter-compatible model listing, not runtime readiness.
 - Skip `/v1/init` when the selected DiT is loaded and the requested LM is already initialized.
 - Keep calling `/v1/init` when the selected DiT is not loaded, the LM is not initialized, or the loaded LM does not match the requested LM.
 - Add regression tests for the text-generation fast path.

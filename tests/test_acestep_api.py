@@ -6,8 +6,8 @@ from autotransition.config import RuntimeConfig
 from autotransition.models.acestep_api import (
     AceStepApiClient,
     AceStepApiError,
+    DIT_INSTRUCTION,
     DEFAULT_LM_MODEL_PATH,
-    LM_AUDIO_CODE_INSTRUCTION,
     _extract_audio_path,
     _extract_task_result,
     _raise_api_status,
@@ -96,7 +96,7 @@ def test_base_profile_keeps_non_turbo_step_default() -> None:
     profile = get_model_profile("acestep-v15-base")
     defaults = _text2music_defaults_for_profile(profile)
 
-    assert profile.default_inference_steps == 64
+    assert profile.default_inference_steps == 50
     assert defaults["guidance_scale"] == 7.0
     assert defaults["shift"] == 3.0
 
@@ -147,7 +147,7 @@ def test_repaint_uploads_scaffold_as_multipart_file(tmp_path: Path, monkeypatch)
 
     def fake_get(url, **kwargs):
         calls.append(("get", url, kwargs))
-        if url.endswith("/v1/models"):
+        if url.endswith("/v1/model_inventory"):
             return Response({"data": {"models": [{"name": "acestep-v15-turbo"}]}})
         if url.endswith("/v1/audio"):
             return Response({}, content=b"generated")
@@ -240,7 +240,7 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
 
     def fake_get(url, **kwargs):
         calls.append(("get", url, kwargs))
-        if url.endswith("/v1/models"):
+        if url.endswith("/v1/model_inventory"):
             return Response({"data": {"models": [{"name": "acestep-v15-turbo"}]}})
         if url.endswith("/v1/audio"):
             return Response({}, content=b"generated")
@@ -266,7 +266,7 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             assert payload["vocal_language"] == "unknown"
             assert payload["audio_duration"] == 36.0
             assert payload["audio_format"] == "flac"
-            assert payload["instruction"] == LM_AUDIO_CODE_INSTRUCTION
+            assert payload["instruction"] == DIT_INSTRUCTION
             assert payload["time_signature"] == "4"
             assert payload["lm_model_path"] == DEFAULT_LM_MODEL_PATH
             assert payload["use_random_seed"] is False
@@ -349,7 +349,7 @@ def test_text2music_skips_init_when_dit_and_lm_are_loaded(tmp_path: Path, monkey
 
     def fake_get(url, **kwargs):
         calls.append(("get", url, kwargs))
-        if url.endswith("/v1/models"):
+        if url.endswith("/v1/model_inventory"):
             return Response(
                 {
                     "data": {
@@ -424,7 +424,7 @@ def test_text2music_fails_when_lm_init_is_not_confirmed(tmp_path: Path, monkeypa
             return self._body
 
     def fake_get(url, **kwargs):
-        if url.endswith("/v1/models"):
+        if url.endswith("/v1/model_inventory"):
             return Response({"data": {"models": [{"name": "acestep-v15-turbo"}]}})
         return Response({})
 
@@ -494,7 +494,7 @@ def test_repaint_initializes_when_model_list_is_non_json(tmp_path: Path, monkeyp
 
     def fake_get(url, **kwargs):
         calls.append(("get", url, kwargs))
-        if url.endswith("/v1/models"):
+        if url.endswith("/v1/model_inventory"):
             return Response(None, text="")
         if url.endswith("/v1/audio"):
             return Response({}, content=b"generated")

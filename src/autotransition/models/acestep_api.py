@@ -16,7 +16,6 @@ from autotransition.pipeline import SourceSelectionPlan
 
 
 DIT_INSTRUCTION = "Fill the audio semantic mask based on the given conditions:"
-LM_AUDIO_CODE_INSTRUCTION = "Generate audio semantic tokens based on the given conditions:"
 DEFAULT_LM_MODEL_PATH = "acestep-5Hz-lm-1.7B"
 
 
@@ -86,7 +85,7 @@ class AceStepApiClient:
             "batch_size": 1,
             "inference_steps": profile.default_inference_steps,
             "thinking": True,
-            "instruction": LM_AUDIO_CODE_INSTRUCTION,
+            "instruction": DIT_INSTRUCTION,
             "use_format": False,
             "time_signature": "4",
             "infer_method": "ode",
@@ -220,14 +219,14 @@ class AceStepApiClient:
         try:
             models = _request(
                 "get",
-                f"{self.config.api_base_url}/v1/models",
-                "v1/models",
+                f"{self.config.api_base_url}/v1/model_inventory",
+                "v1/model_inventory",
                 timeout=self.config.api_timeout_seconds,
             )
-            _raise_api_status(models, "v1/models")
-            body = _response_json(models, "v1/models")
+            _raise_api_status(models, "v1/model_inventory")
+            body = _response_json(models, "v1/model_inventory")
         except AceStepApiError as exc:
-            print(f"[Autotransition] ACE-Step model list unavailable; initializing directly. {exc}")
+            print(f"[Autotransition] ACE-Step model inventory unavailable; initializing directly. {exc}")
 
         inventory = _model_inventory(body)
         if inventory.is_model_loaded(profile.slug):
