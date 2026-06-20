@@ -46,6 +46,10 @@ const el = {
   inferenceSteps: document.querySelector("#inferenceSteps"),
   guidanceScale: document.querySelector("#guidanceScale"),
   shiftValue: document.querySelector("#shiftValue"),
+  repaintStrength: document.querySelector("#repaintStrength"),
+  repaintMode: document.querySelector("#repaintMode"),
+  repaintLatentCrossfadeFrames: document.querySelector("#repaintLatentCrossfadeFrames"),
+  repaintWavCrossfadeSec: document.querySelector("#repaintWavCrossfadeSec"),
   resetAceDefaultsButton: document.querySelector("#resetAceDefaultsButton"),
   generateButton: document.querySelector("#generateButton"),
   generationActivity: document.querySelector("#generationActivity"),
@@ -172,10 +176,14 @@ function setNumeric(node, value) {
 }
 
 function applyAceDefaults(model) {
-  const defaults = (model && (model.generation_defaults || model.repaint_defaults)) || {};
+  const defaults = model ? { ...(model.generation_defaults || {}), ...(model.repaint_defaults || {}) } : {};
   setNumeric(el.inferenceSteps, defaults.inference_steps);
   setNumeric(el.guidanceScale, defaults.guidance_scale);
   setNumeric(el.shiftValue, defaults.shift);
+  setNumeric(el.repaintStrength, defaults.repaint_strength);
+  el.repaintMode.value = defaults.repaint_mode || "balanced";
+  setNumeric(el.repaintLatentCrossfadeFrames, defaults.repaint_latent_crossfade_frames);
+  setNumeric(el.repaintWavCrossfadeSec, defaults.repaint_wav_crossfade_sec);
   state.advancedDirty = false;
 }
 
@@ -374,6 +382,10 @@ function aceStepSettingsPayload() {
     inference_steps: numericValue(el.inferenceSteps),
     guidance_scale: numericValue(el.guidanceScale),
     shift: numericValue(el.shiftValue),
+    repaint_strength: numericValue(el.repaintStrength),
+    repaint_mode: el.repaintMode.value || null,
+    repaint_latent_crossfade_frames: numericValue(el.repaintLatentCrossfadeFrames),
+    repaint_wav_crossfade_sec: numericValue(el.repaintWavCrossfadeSec),
   };
 }
 
@@ -567,6 +579,10 @@ el.sourceAudio.addEventListener("seeked", () => {
   el.inferenceSteps,
   el.guidanceScale,
   el.shiftValue,
+  el.repaintStrength,
+  el.repaintMode,
+  el.repaintLatentCrossfadeFrames,
+  el.repaintWavCrossfadeSec,
 ].forEach((node) => {
   node.addEventListener("input", () => {
     state.advancedDirty = true;
