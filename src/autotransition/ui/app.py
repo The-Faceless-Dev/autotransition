@@ -455,21 +455,18 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                     ace_step_settings=request.ace_step.to_payload() if request.ace_step else None,
                 )
             )
-            ui_log.add("info", "Preparing internal repaint scaffold for generation.")
-            build_selection_scaffold(
-                source_path=plan.source_path,
-                output_path=plan.scaffold_path,
-                tail_start_seconds=plan.tail_start_seconds,
-                tail_end_seconds=plan.tail_end_seconds,
-                blank_seconds=config.new_section_seconds,
-                output_format=plan.audio_format,
-                target_end_seconds=(
-                    request.continuation_point_seconds + config.new_section_seconds
-                    if request.generation_region == "repaint_existing"
-                    else None
-                ),
-                append_silence=request.generation_region != "extend",
-            )
+            if request.generation_region == "repaint_existing":
+                ui_log.add("info", "Preparing internal repaint scaffold for generation.")
+                build_selection_scaffold(
+                    source_path=plan.source_path,
+                    output_path=plan.scaffold_path,
+                    tail_start_seconds=plan.tail_start_seconds,
+                    tail_end_seconds=plan.tail_end_seconds,
+                    blank_seconds=config.new_section_seconds,
+                    output_format=plan.audio_format,
+                    target_end_seconds=request.continuation_point_seconds + config.new_section_seconds,
+                    append_silence=True,
+                )
         except Exception as exc:
             ui_log.add("error", str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -76,10 +76,22 @@ class AceStepApiClient:
             "vocal_language": "unknown",
             "model": profile.slug,
             "audio_duration": plan.requested_continuation_seconds,
-            "audio_format": plan.audio_format,
+            "audio_format": _raw_text2music_audio_format(plan.audio_format),
             "batch_size": 1,
             "inference_steps": profile.default_inference_steps,
             "thinking": True,
+            "use_format": True,
+            "time_signature": "4",
+            "infer_method": "ode",
+            "use_tiled_decode": True,
+            "constrained_decoding": True,
+            "use_cot_caption": True,
+            "use_cot_language": True,
+            "allow_lm_batch": True,
+            "lm_temperature": 0.85,
+            "lm_cfg_scale": 2.5,
+            "lm_top_p": 0.9,
+            "lm_negative_prompt": "NO USER INPUT",
         }
         payload.update(_text2music_defaults_for_profile(profile))
         payload.update(_filter_settings(plan.ace_step_settings, {"inference_steps", "guidance_scale", "shift"}))
@@ -91,24 +103,36 @@ class AceStepApiClient:
         if plan.key_hint:
             payload["key_scale"] = plan.key_hint
 
-        return self._submit_and_wait(payload=payload, save_dir=save_dir)
+        return self._submit_and_wait(payload=payload, save_dir=save_dir, use_json=True)
 
     def _submit_and_wait(
         self,
         payload: dict[str, Any],
         save_dir: Path,
         files: dict[str, Any] | None = None,
+        use_json: bool = False,
     ) -> RepaintResult:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        _write_debug_json(save_dir / "ace-request.json", payload)
+        request_kwargs: dict[str, Any] = {
+            "timeout": self.config.generation_timeout_seconds,
+        }
+        if files is not None:
+            request_kwargs["files"] = files
+        if use_json and not files:
+            request_kwargs["json"] = payload
+        else:
+            request_kwargs["data"] = _stringify_form_fields(payload)
+
         release = _request(
             "post",
             f"{self.config.api_base_url}/release_task",
             "release_task",
-            data=_stringify_form_fields(payload),
-            files=files,
-            timeout=self.config.generation_timeout_seconds,
+            **request_kwargs,
         )
         _raise_api_status(release, "release_task")
         release_body = _response_json(release, "release_task")
+        _write_debug_json(save_dir / "ace-release-response.json", release_body)
         if release_body.get("error"):
             raise AceStepApiError(str(release_body["error"]))
 
@@ -127,6 +151,7 @@ class AceStepApiClient:
             )
             _raise_api_status(query, "query_result")
             query_body = _response_json(query, "query_result")
+            _write_debug_json(save_dir / "ace-query-response-latest.json", query_body)
             if query_body.get("error"):
                 raise AceStepApiError(str(query_body["error"]))
 
@@ -135,8 +160,10 @@ class AceStepApiClient:
             if task_result:
                 status = task_result.get("status")
                 if status == 1 or status == "succeeded":
+                    _write_debug_json(save_dir / "ace-query-response-final.json", query_body)
                     return self._download_result(task_result, save_dir, task_id)
                 if status == 2 or status == "failed":
+                    _write_debug_json(save_dir / "ace-query-response-final.json", query_body)
                     raise AceStepApiError(str(task_result.get("error") or task_result.get("message") or "Generation failed"))
 
             time.sleep(self.config.poll_interval_seconds)
@@ -151,7 +178,7 @@ class AceStepApiClient:
             raise AceStepApiError(f"ACE-Step task succeeded but no audio path was returned: {task_result}")
 
         save_dir.mkdir(parents=True, exist_ok=True)
-        output_path = save_dir / f"{task_id}.wav"
+        output_path = save_dir / f"{task_id}{_audio_extension(audio_path, task_result)}"
         metadata_path = save_dir / f"{task_id}.json"
 
         response = _request(
@@ -163,7 +190,12 @@ class AceStepApiClient:
         )
         _raise_api_status(response, "v1/audio")
         output_path.write_bytes(response.content)
-        metadata_path.write_text(json.dumps(task_result, indent=2), encoding="utf-8")
+        metadata = {
+            **task_result,
+            "downloaded_audio_path": str(output_path),
+            "ace_audio_path": audio_path,
+        }
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
         return RepaintResult(output_path=output_path, metadata_path=metadata_path, model_name="ACE-Step API")
 
@@ -209,6 +241,7 @@ class AceStepApiClient:
         init_body = _response_json(init, "v1/init")
         if init_body.get("error"):
             raise AceStepApiError(str(init_body["error"]))
+        _validate_init_response(init_body, profile, init_llm)
 
 
 def _extract_task_result(data: Any, task_id: str) -> dict[str, Any] | None:
@@ -272,6 +305,43 @@ def _normalize_audio_path(value: str) -> str:
         if query_path:
             return query_path[0]
     return value
+
+
+def _raw_text2music_audio_format(app_output_format: str) -> str:
+    if app_output_format == "wav32":
+        return "wav32"
+    return "flac"
+
+
+def _audio_extension(audio_path: str, task_result: dict[str, Any]) -> str:
+    for value in (audio_path, str(task_result.get("file", "")), str(task_result.get("audio_path", ""))):
+        suffix = Path(urlparse(value).path).suffix.lower()
+        if suffix in {".flac", ".wav", ".mp3", ".opus", ".aac", ".m4a", ".ogg"}:
+            return suffix
+    audio_format = str(task_result.get("audio_format") or task_result.get("format") or "").lower()
+    if audio_format == "wav32":
+        return ".wav"
+    if audio_format in {"flac", "wav", "mp3", "opus", "aac", "ogg"}:
+        return f".{audio_format}"
+    return ".flac"
+
+
+def _write_debug_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _validate_init_response(init_body: dict[str, Any], profile: ModelProfile, init_llm: bool) -> None:
+    data = init_body.get("data")
+    if not isinstance(data, dict):
+        return
+    loaded_model = data.get("loaded_model")
+    if isinstance(loaded_model, str) and loaded_model and loaded_model != profile.slug:
+        raise AceStepApiError(
+            f"ACE-Step initialized '{loaded_model}' instead of requested model '{profile.slug}': {init_body}"
+        )
+    if init_llm and "llm_initialized" in data and data.get("llm_initialized") is not True:
+        raise AceStepApiError(f"ACE-Step LM initialization did not complete: {init_body}")
 
 
 def _stringify_form_fields(payload: dict[str, Any]) -> dict[str, str]:

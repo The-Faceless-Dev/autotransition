@@ -259,7 +259,7 @@ def test_ui_generate_from_selection_reports_missing_model(tmp_path: Path) -> Non
     payload = response.json()
     assert payload["result"]["status"] == "failed"
     assert "not installed" in payload["result"]["message"]
-    assert Path(payload["result"]["scaffold_path"]).exists()
+    assert not Path(payload["result"]["scaffold_path"]).exists()
     assert payload["plan"]["requested_continuation_seconds"] == 5.0
     assert payload["plan"]["repainting_end_seconds"] == 7.0
 

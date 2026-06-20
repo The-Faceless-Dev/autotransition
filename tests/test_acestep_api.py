@@ -239,26 +239,41 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
         calls.append(("post", url, kwargs))
         if url.endswith("/v1/init"):
             assert kwargs["json"] == {"model": "acestep-v15-turbo", "init_llm": True}
-            return Response({})
+            return Response({"data": {"loaded_model": "acestep-v15-turbo", "llm_initialized": True}})
         if url.endswith("/release_task"):
             assert "files" not in kwargs or kwargs["files"] is None
-            assert kwargs["data"]["task_type"] == "text2music"
-            assert kwargs["data"]["thinking"] == "true"
-            assert kwargs["data"]["prompt"] == "instrumental cinematic horror"
-            assert kwargs["data"]["lyrics"] == "[Instrumental]"
-            assert kwargs["data"]["vocal_language"] == "unknown"
-            assert kwargs["data"]["audio_duration"] == "36.0"
-            assert kwargs["data"]["use_random_seed"] == "false"
-            assert kwargs["data"]["seed"] == "42"
-            assert kwargs["data"]["bpm"] == "120"
-            assert kwargs["data"]["key_scale"] == "A minor"
-            assert kwargs["data"]["inference_steps"] == "16"
-            assert kwargs["data"]["guidance_scale"] == "2.0"
-            assert "chunk_mask_mode" not in kwargs["data"]
-            assert "repaint_strength" not in kwargs["data"]
+            assert "data" not in kwargs
+            payload = kwargs["json"]
+            assert payload["task_type"] == "text2music"
+            assert payload["thinking"] is True
+            assert payload["use_format"] is True
+            assert payload["prompt"] == "instrumental cinematic horror"
+            assert payload["lyrics"] == "[Instrumental]"
+            assert payload["vocal_language"] == "unknown"
+            assert payload["audio_duration"] == 36.0
+            assert payload["audio_format"] == "flac"
+            assert payload["time_signature"] == "4"
+            assert payload["use_random_seed"] is False
+            assert payload["seed"] == 42
+            assert payload["bpm"] == 120
+            assert payload["key_scale"] == "A minor"
+            assert payload["inference_steps"] == 16
+            assert payload["guidance_scale"] == 2.0
+            assert payload["infer_method"] == "ode"
+            assert payload["use_tiled_decode"] is True
+            assert payload["constrained_decoding"] is True
+            assert payload["use_cot_caption"] is True
+            assert payload["use_cot_language"] is True
+            assert payload["allow_lm_batch"] is True
+            assert payload["lm_temperature"] == 0.85
+            assert payload["lm_cfg_scale"] == 2.5
+            assert payload["lm_top_p"] == 0.9
+            assert payload["lm_negative_prompt"] == "NO USER INPUT"
+            assert "chunk_mask_mode" not in payload
+            assert "repaint_strength" not in payload
             return Response({"data": {"task_id": "task-1"}})
         if url.endswith("/query_result"):
-            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "generated.wav"}]})
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "generated.flac"}]})
         return Response({})
 
     fake_httpx = SimpleNamespace(get=fake_get, post=fake_post)
@@ -271,7 +286,74 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
     )
 
     assert result.output_path.read_bytes() == b"generated"
+    assert result.output_path.suffix == ".flac"
+    assert (tmp_path / "generated" / "ace-request.json").exists()
+    assert (tmp_path / "generated" / "ace-release-response.json").exists()
+    assert (tmp_path / "generated" / "ace-query-response-final.json").exists()
     assert any(call[1].endswith("/v1/init") for call in calls)
+
+
+def test_text2music_fails_when_lm_init_is_not_confirmed(tmp_path: Path, monkeypatch) -> None:
+    plan = SourceSelectionPlan(
+        transition_id="test-generation",
+        source_path=tmp_path / "source.mp3",
+        source_extension=".mp3",
+        source_format="MP3",
+        source_duration_seconds=60.0,
+        continuation_point_seconds=30.0,
+        tail_start_seconds=12.0,
+        tail_end_seconds=30.0,
+        scaffold_path=tmp_path / "scaffold.wav",
+        metadata_path=tmp_path / "metadata.json",
+        caption="instrumental cinematic horror",
+        context_seconds=18.0,
+        repaint_overlap_seconds=0.0,
+        new_section_seconds=36.0,
+        requested_continuation_seconds=36.0,
+        effective_continuation_seconds=None,
+        repainting_start_seconds=18.0,
+        repainting_end_seconds=54.0,
+        audio_format="wav",
+        bpm_hint=None,
+        key_hint=None,
+        seed=None,
+    )
+
+    class Response:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, body) -> None:
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/v1/models"):
+            return Response({"data": {"models": [{"name": "acestep-v15-turbo"}]}})
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/v1/init"):
+            return Response({"data": {"loaded_model": "acestep-v15-turbo", "llm_initialized": False}})
+        raise AssertionError("generation should not start when LM init is incomplete")
+
+    fake_httpx = SimpleNamespace(get=fake_get, post=fake_post)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    try:
+        AceStepApiClient(RuntimeConfig()).text2music(
+            plan=plan,
+            profile=get_model_profile("acestep-v15-turbo"),
+            save_dir=tmp_path / "generated",
+        )
+    except AceStepApiError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected AceStepApiError")
+
+    assert "LM initialization did not complete" in message
 
 
 def test_repaint_initializes_when_model_list_is_non_json(tmp_path: Path, monkeypatch) -> None:
