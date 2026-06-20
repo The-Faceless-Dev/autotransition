@@ -229,15 +229,10 @@ class AceStepApiClient:
         except AceStepApiError as exc:
             print(f"[Autotransition] ACE-Step model list unavailable; initializing directly. {exc}")
 
-        model_data = body.get("data") or {}
-        model_items = model_data.get("models", []) if isinstance(model_data, dict) else model_data
-        available = {
-            item.get("name")
-            for item in model_items
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
-        }
-        if profile.slug in available and not init_llm:
-            return
+        inventory = _model_inventory(body)
+        if inventory.is_model_loaded(profile.slug):
+            if not init_llm or inventory.is_lm_loaded(lm_model_path):
+                return
 
         repair = repair_incomplete_checkpoint(profile, self.config)
         if repair.repaired:
@@ -359,6 +354,53 @@ def _validate_init_response(init_body: dict[str, Any], profile: ModelProfile, in
         )
     if init_llm and "llm_initialized" in data and data.get("llm_initialized") is not True:
         raise AceStepApiError(f"ACE-Step LM initialization did not complete: {init_body}")
+
+
+@dataclass(frozen=True)
+class _ModelInventory:
+    loaded_models: frozenset[str]
+    llm_initialized: bool
+    loaded_lm_model: str | None
+
+    def is_model_loaded(self, model_name: str) -> bool:
+        return model_name in self.loaded_models
+
+    def is_lm_loaded(self, lm_model_path: str | None) -> bool:
+        if not self.llm_initialized:
+            return False
+        if not lm_model_path:
+            return True
+        return _model_name(lm_model_path) == _model_name(self.loaded_lm_model)
+
+
+def _model_inventory(body: dict[str, Any]) -> _ModelInventory:
+    data = body.get("data") or {}
+    model_items = data.get("models", []) if isinstance(data, dict) else data
+    loaded_models = {
+        item.get("name")
+        for item in model_items
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item.get("is_loaded") is True
+        )
+    }
+    if isinstance(data, dict):
+        return _ModelInventory(
+            loaded_models=frozenset(loaded_models),
+            llm_initialized=data.get("llm_initialized") is True,
+            loaded_lm_model=data.get("loaded_lm_model") if isinstance(data.get("loaded_lm_model"), str) else None,
+        )
+    return _ModelInventory(loaded_models=frozenset(loaded_models), llm_initialized=False, loaded_lm_model=None)
+
+
+def _model_name(path_or_name: str | None) -> str | None:
+    if path_or_name is None:
+        return None
+    text = str(path_or_name).strip().replace("\\", "/")
+    if not text:
+        return None
+    return text.rstrip("/").split("/")[-1]
 
 
 def _stringify_form_fields(payload: dict[str, Any]) -> dict[str, str]:
