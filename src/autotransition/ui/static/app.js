@@ -117,7 +117,6 @@ function applyPreset(preset) {
   el.newSeconds.value = preset.config.new_section_seconds;
   el.repaintOverlapSeconds.value = preset.config.repaint_overlap_seconds;
   if (!el.bpmInput.value) el.bpmInput.value = "120";
-  if (!el.keyInput.value.trim()) el.keyInput.value = "C minor";
   updateSelectionReadout();
 }
 

@@ -2,15 +2,16 @@
 
 Autotransition is an early-stage pipeline for creating AI-generated music transitions. It is distributed by **The Faceless Dancer** and is intended to become a public, reusable tool for creators, streamers, visualizers, rhythm-game experiments, and other media projects.
 
-The first workflow focuses on ACE-Step continuation from a selected point in a source song:
+The primary workflow focuses on ACE-Step continuation from a selected point in a source song:
 
 1. Load a source song.
 2. Select the point where new music should continue.
-3. Generate a new prompted section with ACE-Step text-to-music.
-4. Stitch the generated section after the selected point.
-5. Return playable generated candidates for review and export.
+3. Enter a target prompt and transition settings.
+4. Generate a new prompted section with ACE-Step text-to-music.
+5. Use ACE-Step repaint across the boundary so the continuation transitions naturally.
+6. Listen to the result in the UI, then optionally use that result as the next source.
 
-ACE-Step runtime integration is managed through the local app command. The transition scaffold is created internally from the selected part of the source song, then sent to ACE-Step for repaint/continuation generation.
+ACE-Step runtime integration is managed through the local app command. Autotransition is currently built around the working ACE-Step 1.5 XL Turbo runtime path. The app keeps generation requests on the active ACE runtime path and creates repaint scaffolds internally from the selected source and generated continuation.
 
 ## Setup
 
@@ -23,16 +24,6 @@ python -m pip install -e ".[dev]"
 ```
 
 You also need `ffmpeg` available on your `PATH` for broad audio format support. Conda installs it through `environment.yml`.
-
-## Quickstart
-
-Prepare a repaint scaffold from an existing clip:
-
-```powershell
-autotransition scaffold path\to\clip.wav --preset smooth-continuation
-```
-
-By default, scaffold files and metadata are written under `data/scaffolds/`, which is ignored by git.
 
 ## Local UI
 
@@ -54,9 +45,9 @@ Then open the printed local URL, usually:
 http://127.0.0.1:7860
 ```
 
-The UI includes transition presets, direct settings, ACE-Step model status, system status, recent outputs, and local logs.
+The UI includes direct prompt/settings controls, ACE-Step runtime status, recent outputs, playable results, and local logs.
 
-The main UI workflow is `Generate Transition`: load a song, select the continuation point, enter the target prompt/settings, choose an ACE-Step model, and generate. Internal repaint scaffolds are created automatically and shown only as output details/logs.
+The main UI workflow is `Generate Transition`: load a song, select the continuation point, enter the target prompt/settings, and generate. Internal repaint scaffolds are created automatically and shown only as output details/logs. Generated outputs include a `Use as Source` action so you can chain another transition from the result.
 
 `autotransition run` starts the ACE-Step API when needed and stops the ACE-Step process it started when the app shuts down. If ACE-Step was already running before the app started, Autotransition leaves that process alone.
 
@@ -74,53 +65,22 @@ Then:
 autotransition run
 ```
 
-Advanced runtime/debug commands are documented in `docs/ace-step-runtime.md`.
-
-## Presets
-
-Initial presets are intentionally creator-friendly:
-
-- `smooth-continuation`
-- `energy-build`
-- `breakdown`
-- `genre-shift`
-- `dj-bridge`
-
-Presets set practical defaults for source context length, generated duration, prompt language, and optional BPM/key hints.
-
-## ACE-Step Models
-
-Autotransition keeps model selection separate from transition planning. Repaint-capable ACE-Step profiles are listed through:
-
-```powershell
-autotransition models list
-```
-
-Install a selected profile from Hugging Face:
-
-```powershell
-autotransition models install acestep-v15-turbo
-```
-
-The future generation command and UI should also be able to download the selected model automatically when it is missing, after clearly showing the model name, source, local path, and hardware notes.
+The current UI does not expose model selection. It presents the workflow as ACE-Step 1.5 XL Turbo and uses the active ACE-Step runtime path that the app starts.
 
 ## Project Layout
 
 ```text
 src/autotransition/
   audio/        Audio slicing, silence, and stitching helpers.
-  models/       Interfaces for future ACE-Step repaint integration.
+  models/       ACE-Step runtime/API integration.
   pipeline/     Transition planning and scaffold state.
   scoring/      Candidate scoring interfaces.
   cli.py        Command-line entry point.
   config.py     Central configuration defaults.
-  presets.py    Named transition presets.
 ```
 
 ## Current Limitations
 
 - Candidate scoring is only an interface placeholder.
-- ACE-Step first-run model downloads can take a long time and require enough disk space for the selected model.
+- ACE-Step first-run runtime/model downloads can take a long time and require enough disk space.
 - Audio loading and scaffold generation depend on `pydub` and `ffmpeg`.
-
-See `docs/plans/` for implementation plans.
