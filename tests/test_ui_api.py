@@ -50,6 +50,19 @@ def test_ui_models_endpoint_includes_install_status(tmp_path: Path) -> None:
     assert all("status" in model for model in models)
 
 
+def test_ui_models_endpoint_exposes_working_xl_base_generation_defaults(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    models = response.json()
+    xl_base = next(model for model in models if model["slug"] == "acestep-v15-xl-base")
+    assert xl_base["generation_defaults"]["inference_steps"] == 50
+    assert xl_base["generation_defaults"]["guidance_scale"] == 7.0
+    assert xl_base["generation_defaults"]["shift"] == 3.0
+
+
 def test_ui_runtime_status_endpoint_returns_setup_commands(tmp_path: Path) -> None:
     client = TestClient(create_app(models_dir=tmp_path))
 

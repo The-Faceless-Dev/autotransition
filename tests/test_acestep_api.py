@@ -282,7 +282,7 @@ def test_text2music_generates_prompted_section_without_source_audio(tmp_path: Pa
             assert payload["use_cot_caption"] is False
             assert payload["use_cot_language"] is False
             assert payload["allow_lm_batch"] is True
-            assert payload["lm_temperature"] == 1.0
+            assert payload["lm_temperature"] == 0.85
             assert payload["lm_cfg_scale"] == 2.5
             assert payload["lm_top_p"] == 0.9
             assert payload["lm_negative_prompt"] == "NO USER INPUT"

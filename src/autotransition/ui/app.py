@@ -79,7 +79,7 @@ class AceStepAdvancedSettings(BaseModel):
 
 
 class GenerateSelectionRequest(SelectionScaffoldRequest):
-    model_slug: str = "acestep-v15-turbo"
+    model_slug: str = "acestep-v15-xl-base"
     auto_install: bool = False
     ace_step: AceStepAdvancedSettings | None = None
 

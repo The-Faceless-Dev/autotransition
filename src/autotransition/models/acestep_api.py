@@ -95,7 +95,7 @@ class AceStepApiClient:
             "use_cot_language": False,
             "allow_lm_batch": True,
             "lm_model_path": lm_model_path,
-            "lm_temperature": 1.0,
+            "lm_temperature": 0.85,
             "lm_cfg_scale": 2.5,
             "lm_top_p": 0.9,
             "lm_negative_prompt": "NO USER INPUT",

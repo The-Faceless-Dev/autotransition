@@ -137,7 +137,13 @@ function renderModels() {
     el.modelSelect.appendChild(option(label, model.slug));
   });
   if (state.models.length) {
-    applyModel(state.models[0]);
+    const preferred =
+      state.models.find((model) => model.slug === "acestep-v15-xl-base" && model.status.state === "ready") ||
+      state.models.find((model) => model.slug === "acestep-v15-xl-base") ||
+      state.models.find((model) => model.status.state === "ready") ||
+      state.models[0];
+    el.modelSelect.value = preferred.slug;
+    applyModel(preferred);
   }
 }
 
