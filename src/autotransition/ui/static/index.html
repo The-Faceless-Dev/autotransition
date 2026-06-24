@@ -267,11 +267,11 @@
           </label>
           <label class="field">
             <span>Inference steps</span>
-            <input id="extractInferenceSteps" type="number" min="1" max="200" step="1" value="50" />
+            <input id="extractInferenceSteps" type="number" min="1" max="200" step="1" value="80" />
           </label>
           <label class="field">
             <span>Guidance scale</span>
-            <input id="extractGuidanceScale" type="number" min="0" step="0.1" value="7" />
+            <input id="extractGuidanceScale" type="number" min="0" step="0.1" value="0.6" />
           </label>
           <label class="field">
             <span>Shift</span>
@@ -317,11 +317,11 @@
             </label>
             <label class="field">
               <span>Inference steps</span>
-              <input id="baseTestInferenceSteps" type="number" min="1" max="200" step="1" value="50" />
+              <input id="baseTestInferenceSteps" type="number" min="1" max="200" step="1" value="80" />
             </label>
             <label class="field">
               <span>Guidance scale</span>
-              <input id="baseTestGuidanceScale" type="number" min="0" step="0.1" value="7" />
+              <input id="baseTestGuidanceScale" type="number" min="0" step="0.1" value="0.6" />
             </label>
             <label class="field">
               <span>Shift</span>
@@ -330,8 +330,8 @@
             <label class="field">
               <span>Infer method</span>
               <select id="baseTestInferMethod">
-                <option value="ode" selected>ODE</option>
-                <option value="sde">SDE</option>
+                <option value="ode">ODE</option>
+                <option value="sde" selected>SDE</option>
               </select>
             </label>
             <label class="field">
@@ -350,7 +350,7 @@
 
           <div class="toggle-row">
             <label><input id="baseTestUseTiledDecode" type="checkbox" checked /> Tiled decode</label>
-            <label><input id="baseTestDcwEnabled" type="checkbox" checked /> DCW</label>
+            <label><input id="baseTestDcwEnabled" type="checkbox" /> DCW</label>
           </div>
 
           <div class="button-row">

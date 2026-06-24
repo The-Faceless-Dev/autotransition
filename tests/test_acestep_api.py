@@ -439,9 +439,14 @@ def test_extract_track_initializes_base_slot_and_uploads_source(tmp_path: Path, 
             assert payload["model"] == ACE_STEP_BASE_MODEL
             assert payload["track_name"] == "vocals"
             assert payload["audio_format"] == "flac"
-            assert payload["inference_steps"] == "50"
-            assert payload["guidance_scale"] == "7.0"
+            assert payload["inference_steps"] == "80"
+            assert payload["guidance_scale"] == "0.6"
             assert payload["shift"] == "1.0"
+            assert payload["infer_method"] == "sde"
+            assert payload["use_tiled_decode"] == "true"
+            assert payload["dcw_enabled"] == "false"
+            assert payload["velocity_norm_threshold"] == "0.0"
+            assert payload["velocity_ema_factor"] == "0.0"
             assert "lyrics" not in payload
             assert "src_audio" in kwargs["files"]
             filename, file_obj, mime = kwargs["files"]["src_audio"]
@@ -493,16 +498,16 @@ def test_base_text2music_test_uses_non_turbo_schedule(tmp_path: Path, monkeypatc
             assert payload["task_type"] == "text2music"
             assert payload["model"] == ACE_STEP_BASE_MODEL
             assert payload["prompt"] == "dark strings"
-            assert payload["inference_steps"] == 50
-            assert payload["guidance_scale"] == 7.0
+            assert payload["inference_steps"] == 80
+            assert payload["guidance_scale"] == 0.6
             assert payload["shift"] == 1.0
-            assert payload["infer_method"] == "ode"
+            assert payload["infer_method"] == "sde"
             assert payload["sampler_mode"] == "euler"
             assert payload["use_adg"] is False
-            assert payload["use_tiled_decode"] is False
+            assert payload["use_tiled_decode"] is True
             assert payload["dcw_enabled"] is False
-            assert payload["velocity_norm_threshold"] == 2.5
-            assert payload["velocity_ema_factor"] == 0.35
+            assert payload["velocity_norm_threshold"] == 0.0
+            assert payload["velocity_ema_factor"] == 0.0
             assert payload["thinking"] is True
             return Response({"data": {"task_id": "task-1"}})
         if url.endswith("/query_result"):
@@ -515,10 +520,6 @@ def test_base_text2music_test_uses_non_turbo_schedule(tmp_path: Path, monkeypatc
     result = AceStepApiClient(RuntimeConfig()).text2music_base_test(
         prompt="dark strings",
         save_dir=tmp_path / "base-test",
-        use_tiled_decode=False,
-        dcw_enabled=False,
-        velocity_norm_threshold=2.5,
-        velocity_ema_factor=0.35,
     )
 
     assert result.output_path.read_bytes() == b"base-audio"

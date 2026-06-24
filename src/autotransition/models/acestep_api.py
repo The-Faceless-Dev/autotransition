@@ -22,6 +22,14 @@ ACE_STEP_BASE_MODEL = "acestep-v15-base"
 ACE_STEP_BASE_SLOT = 2
 NON_TURBO_GUIDANCE_SCALE = 7.0
 NON_TURBO_SHIFT = 1.0
+BASE_RUNTIME_INFERENCE_STEPS = 80
+BASE_RUNTIME_GUIDANCE_SCALE = 0.6
+BASE_RUNTIME_SHIFT = 1.0
+BASE_RUNTIME_INFER_METHOD = "sde"
+BASE_RUNTIME_USE_TILED_DECODE = True
+BASE_RUNTIME_DCW_ENABLED = False
+BASE_RUNTIME_VELOCITY_NORM_THRESHOLD = 0.0
+BASE_RUNTIME_VELOCITY_EMA_FACTOR = 0.0
 TURBO_GUIDANCE_SCALE = 1.0
 TURBO_SHIFT = 3.0
 
@@ -148,9 +156,14 @@ class AceStepApiClient:
         save_dir: Path,
         *,
         audio_format: str = "flac",
-        inference_steps: int = 50,
-        guidance_scale: float = NON_TURBO_GUIDANCE_SCALE,
-        shift: float = NON_TURBO_SHIFT,
+        inference_steps: int = BASE_RUNTIME_INFERENCE_STEPS,
+        guidance_scale: float = BASE_RUNTIME_GUIDANCE_SCALE,
+        shift: float = BASE_RUNTIME_SHIFT,
+        infer_method: str = BASE_RUNTIME_INFER_METHOD,
+        use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE,
+        dcw_enabled: bool = BASE_RUNTIME_DCW_ENABLED,
+        velocity_norm_threshold: float = BASE_RUNTIME_VELOCITY_NORM_THRESHOLD,
+        velocity_ema_factor: float = BASE_RUNTIME_VELOCITY_EMA_FACTOR,
         seed: int | None = None,
         instruction: str | None = None,
     ) -> RepaintResult:
@@ -165,6 +178,11 @@ class AceStepApiClient:
             "inference_steps": inference_steps,
             "guidance_scale": guidance_scale,
             "shift": shift,
+            "infer_method": infer_method,
+            "use_tiled_decode": use_tiled_decode,
+            "dcw_enabled": dcw_enabled,
+            "velocity_norm_threshold": velocity_norm_threshold,
+            "velocity_ema_factor": velocity_ema_factor,
             "thinking": False,
         }
         if instruction:
@@ -187,14 +205,14 @@ class AceStepApiClient:
         save_dir: Path,
         audio_duration: float = 30.0,
         audio_format: str = "flac",
-        inference_steps: int = 50,
-        guidance_scale: float = NON_TURBO_GUIDANCE_SCALE,
-        shift: float = NON_TURBO_SHIFT,
-        infer_method: str = "ode",
-        use_tiled_decode: bool = True,
-        dcw_enabled: bool = True,
-        velocity_norm_threshold: float = 0.0,
-        velocity_ema_factor: float = 0.0,
+        inference_steps: int = BASE_RUNTIME_INFERENCE_STEPS,
+        guidance_scale: float = BASE_RUNTIME_GUIDANCE_SCALE,
+        shift: float = BASE_RUNTIME_SHIFT,
+        infer_method: str = BASE_RUNTIME_INFER_METHOD,
+        use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE,
+        dcw_enabled: bool = BASE_RUNTIME_DCW_ENABLED,
+        velocity_norm_threshold: float = BASE_RUNTIME_VELOCITY_NORM_THRESHOLD,
+        velocity_ema_factor: float = BASE_RUNTIME_VELOCITY_EMA_FACTOR,
         seed: int | None = None,
     ) -> RepaintResult:
         self._ensure_base_extract_model()

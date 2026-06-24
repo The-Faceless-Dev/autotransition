@@ -30,8 +30,14 @@ from autotransition.models import (
 from autotransition.models.acestep_api import (
     AceStepApiClient,
     AceStepApiError,
-    NON_TURBO_GUIDANCE_SCALE,
-    NON_TURBO_SHIFT,
+    BASE_RUNTIME_DCW_ENABLED,
+    BASE_RUNTIME_GUIDANCE_SCALE,
+    BASE_RUNTIME_INFERENCE_STEPS,
+    BASE_RUNTIME_INFER_METHOD,
+    BASE_RUNTIME_SHIFT,
+    BASE_RUNTIME_USE_TILED_DECODE,
+    BASE_RUNTIME_VELOCITY_EMA_FACTOR,
+    BASE_RUNTIME_VELOCITY_NORM_THRESHOLD,
     _repaint_defaults_for_profile,
     _text2music_defaults_for_profile,
 )
@@ -111,9 +117,14 @@ class ExtractionRunRequest(BaseModel):
     source_path: str = Field(..., min_length=1)
     track_name: str = "vocals"
     output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
-    inference_steps: int = Field(50, ge=1, le=200)
-    guidance_scale: float = Field(NON_TURBO_GUIDANCE_SCALE, ge=0)
-    shift: float = Field(NON_TURBO_SHIFT, ge=0)
+    inference_steps: int = Field(BASE_RUNTIME_INFERENCE_STEPS, ge=1, le=200)
+    guidance_scale: float = Field(BASE_RUNTIME_GUIDANCE_SCALE, ge=0)
+    shift: float = Field(BASE_RUNTIME_SHIFT, ge=0)
+    infer_method: Literal["ode", "sde"] = BASE_RUNTIME_INFER_METHOD
+    use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE
+    dcw_enabled: bool = BASE_RUNTIME_DCW_ENABLED
+    velocity_norm_threshold: float = Field(BASE_RUNTIME_VELOCITY_NORM_THRESHOLD, ge=0)
+    velocity_ema_factor: float = Field(BASE_RUNTIME_VELOCITY_EMA_FACTOR, ge=0, le=1)
     seed: int | None = None
     instruction: str | None = None
 
@@ -122,14 +133,14 @@ class BaseGenerationTestRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
     audio_duration: float = Field(30.0, ge=10.0, le=120.0)
-    inference_steps: int = Field(50, ge=1, le=200)
-    guidance_scale: float = Field(NON_TURBO_GUIDANCE_SCALE, ge=0)
-    shift: float = Field(NON_TURBO_SHIFT, ge=0)
-    infer_method: Literal["ode", "sde"] = "ode"
-    use_tiled_decode: bool = True
-    dcw_enabled: bool = True
-    velocity_norm_threshold: float = Field(0.0, ge=0)
-    velocity_ema_factor: float = Field(0.0, ge=0, le=1)
+    inference_steps: int = Field(BASE_RUNTIME_INFERENCE_STEPS, ge=1, le=200)
+    guidance_scale: float = Field(BASE_RUNTIME_GUIDANCE_SCALE, ge=0)
+    shift: float = Field(BASE_RUNTIME_SHIFT, ge=0)
+    infer_method: Literal["ode", "sde"] = BASE_RUNTIME_INFER_METHOD
+    use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE
+    dcw_enabled: bool = BASE_RUNTIME_DCW_ENABLED
+    velocity_norm_threshold: float = Field(BASE_RUNTIME_VELOCITY_NORM_THRESHOLD, ge=0)
+    velocity_ema_factor: float = Field(BASE_RUNTIME_VELOCITY_EMA_FACTOR, ge=0, le=1)
     seed: int | None = None
 
 
@@ -254,6 +265,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 inference_steps=request.inference_steps,
                 guidance_scale=request.guidance_scale,
                 shift=request.shift,
+                infer_method=request.infer_method,
+                use_tiled_decode=request.use_tiled_decode,
+                dcw_enabled=request.dcw_enabled,
+                velocity_norm_threshold=request.velocity_norm_threshold,
+                velocity_ema_factor=request.velocity_ema_factor,
                 seed=request.seed,
                 instruction=request.instruction.strip() if request.instruction else None,
             )
@@ -292,6 +308,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 "inference_steps": request.inference_steps,
                 "guidance_scale": request.guidance_scale,
                 "shift": request.shift,
+                "infer_method": request.infer_method,
+                "use_tiled_decode": request.use_tiled_decode,
+                "dcw_enabled": request.dcw_enabled,
+                "velocity_norm_threshold": request.velocity_norm_threshold,
+                "velocity_ema_factor": request.velocity_ema_factor,
                 "seed": request.seed,
                 "instruction": request.instruction,
             },
