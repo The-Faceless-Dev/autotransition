@@ -14,7 +14,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from autotransition.audio import build_continuation_composite, build_repaint_scaffold, build_selection_scaffold, probe_audio
+from autotransition.audio import (
+    build_continuation_composite,
+    build_repaint_scaffold,
+    build_selection_scaffold,
+    merge_audio_files,
+    probe_audio,
+)
 from autotransition.audio.formats import DEFAULT_SCAFFOLD_FORMAT, SUPPORTED_INPUT_FORMATS, validate_supported_source
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.generation import GenerationResult, GenerationStatus
@@ -30,6 +36,7 @@ from autotransition.models import (
 from autotransition.models.acestep_api import (
     AceStepApiClient,
     AceStepApiError,
+    BASE_EXTRACT_GUIDANCE_SCALE,
     BASE_RUNTIME_DCW_ENABLED,
     BASE_RUNTIME_GUIDANCE_SCALE,
     BASE_RUNTIME_INFERENCE_STEPS,
@@ -116,9 +123,10 @@ EXTRACT_TRACKS = [
 class ExtractionRunRequest(BaseModel):
     source_path: str = Field(..., min_length=1)
     track_name: str = "vocals"
+    label: str | None = None
     output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
     inference_steps: int = Field(BASE_RUNTIME_INFERENCE_STEPS, ge=1, le=200)
-    guidance_scale: float = Field(BASE_RUNTIME_GUIDANCE_SCALE, ge=0)
+    guidance_scale: float = Field(BASE_EXTRACT_GUIDANCE_SCALE, ge=0)
     shift: float = Field(BASE_RUNTIME_SHIFT, ge=0)
     infer_method: Literal["ode", "sde"] = BASE_RUNTIME_INFER_METHOD
     use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE
@@ -144,8 +152,73 @@ class BaseGenerationTestRequest(BaseModel):
     seed: int | None = None
 
 
+class ExtractionRenameRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=120)
+
+
+class ExtractionMergeRequest(BaseModel):
+    extraction_ids: list[str] = Field(..., min_length=2)
+    label: str = Field(..., min_length=1, max_length=120)
+    output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
+
+
+class MusicGenerationRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    model: Literal["acestep-v15-turbo", "acestep-v15-base"] = "acestep-v15-turbo"
+    label: str | None = None
+    output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
+    audio_duration: float = Field(30.0, ge=10.0, le=120.0)
+    inference_steps: int = Field(8, ge=1, le=200)
+    guidance_scale: float = Field(1.0, ge=0)
+    shift: float = Field(3.0, ge=0)
+    infer_method: Literal["ode", "sde"] = "ode"
+    use_tiled_decode: bool = True
+    dcw_enabled: bool = False
+    velocity_norm_threshold: float = Field(0.0, ge=0)
+    velocity_ema_factor: float = Field(0.0, ge=0, le=1)
+    seed: int | None = None
+
+
 def _setting_or_default(value: Any, default: Any) -> Any:
     return default if value is None else value
+
+
+def _extraction_metadata_root() -> Path:
+    return Path("data/extractions")
+
+
+def _extraction_metadata_path(extraction_id: str) -> Path:
+    safe_id = Path(extraction_id).name
+    if not safe_id or safe_id != extraction_id:
+        raise HTTPException(status_code=400, detail="Invalid extraction id.")
+    return _extraction_metadata_root() / safe_id / "extraction.json"
+
+
+def _read_extraction_metadata(extraction_id: str) -> dict[str, Any]:
+    metadata_path = _extraction_metadata_path(extraction_id)
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail=f"Extraction not found: {extraction_id}")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read extraction metadata: {extraction_id}") from exc
+    metadata["metadata_path"] = str(metadata_path)
+    return metadata
+
+
+def _write_extraction_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    metadata_path = Path(str(metadata["metadata_path"]))
+    return _write_metadata(metadata_path, metadata)
+
+
+def _write_metadata(metadata_path: Path, metadata: dict[str, Any]) -> dict[str, Any]:
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return metadata
+
+
+def _music_generation_root() -> Path:
+    return Path("data/generations")
 
 
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
@@ -211,7 +284,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.get("/api/extractions")
     def list_extractions() -> list[dict[str, Any]]:
-        root = Path("data/extractions")
+        root = _extraction_metadata_root()
         if not root.exists():
             return []
         items: list[dict[str, Any]] = []
@@ -226,6 +299,150 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.get("/api/extractions/audio")
     def get_extraction_audio(path: str = Query(..., min_length=1)) -> FileResponse:
         return get_audio_file(path)
+
+    @app.get("/api/music-generations")
+    def list_music_generations() -> list[dict[str, Any]]:
+        root = _music_generation_root()
+        if not root.exists():
+            return []
+        items: list[dict[str, Any]] = []
+        for metadata_path in root.glob("*/generation.json"):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            items.append(metadata)
+        return sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+    @app.get("/api/music-generations/audio")
+    def get_music_generation_audio(path: str = Query(..., min_length=1)) -> FileResponse:
+        return get_audio_file(path)
+
+    @app.post("/api/music-generations/run")
+    def run_music_generation(request: MusicGenerationRequest) -> dict[str, object]:
+        import datetime as _datetime
+
+        generation_id = f"music-{uuid4().hex[:12]}"
+        save_dir = _music_generation_root() / generation_id
+        metadata_path = save_dir / "generation.json"
+        created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
+        prompt = request.prompt.strip()
+        label = request.label.strip() if request.label else prompt[:80]
+        ui_log.add("info", f"Running ACE-Step {request.model} text-to-music generation.")
+        try:
+            result = AceStepApiClient(runtime_config).text2music_standalone(
+                prompt=prompt,
+                model=request.model,
+                save_dir=save_dir,
+                audio_duration=request.audio_duration,
+                audio_format=request.output_format,
+                inference_steps=request.inference_steps,
+                guidance_scale=request.guidance_scale,
+                shift=request.shift,
+                infer_method=request.infer_method,
+                use_tiled_decode=request.use_tiled_decode,
+                dcw_enabled=request.dcw_enabled,
+                velocity_norm_threshold=request.velocity_norm_threshold,
+                velocity_ema_factor=request.velocity_ema_factor,
+                seed=request.seed,
+            )
+        except AceStepApiError as exc:
+            ui_log.add("error", str(exc))
+            metadata = {
+                "generation_id": generation_id,
+                "status": "failed",
+                "message": str(exc),
+                "created_at": created_at,
+                "label": label,
+                "prompt": prompt,
+                "model": request.model,
+                "output_format": request.output_format,
+                "metadata_path": str(metadata_path),
+                "settings": request.model_dump(),
+            }
+            _write_metadata(metadata_path, metadata)
+            return {"generation": metadata}
+
+        metadata = {
+            "generation_id": generation_id,
+            "status": "complete",
+            "message": "Music generation complete.",
+            "created_at": created_at,
+            "label": label,
+            "prompt": prompt,
+            "model": request.model,
+            "output_format": request.output_format,
+            "generated_audio_path": str(result.output_path),
+            "generated_metadata_path": str(result.metadata_path),
+            "metadata_path": str(metadata_path),
+            "settings": request.model_dump(),
+        }
+        _write_metadata(metadata_path, metadata)
+        ui_log.add("info", f"Generated music: {result.output_path}")
+        return {"generation": metadata}
+
+    @app.post("/api/extractions/{extraction_id}/rename")
+    def rename_extraction(extraction_id: str, request: ExtractionRenameRequest) -> dict[str, object]:
+        metadata = _read_extraction_metadata(extraction_id)
+        if metadata.get("type") == "base_test":
+            raise HTTPException(status_code=400, detail="Base Test items cannot be renamed here.")
+        metadata["label"] = request.label.strip()
+        _write_extraction_metadata(metadata)
+        ui_log.add("info", f"Renamed extraction {extraction_id}: {metadata['label']}")
+        return {"extraction": metadata}
+
+    @app.post("/api/extractions/merge")
+    def merge_extractions(request: ExtractionMergeRequest) -> dict[str, object]:
+        import datetime as _datetime
+
+        selected = [_read_extraction_metadata(extraction_id) for extraction_id in request.extraction_ids]
+        source_paths: list[Path] = []
+        for metadata in selected:
+            if metadata.get("type") == "base_test":
+                raise HTTPException(status_code=400, detail="Base Test items cannot be merged.")
+            if metadata.get("status") != "complete":
+                raise HTTPException(status_code=400, detail=f"Only complete items can be merged: {metadata.get('extraction_id')}")
+            audio_path = metadata.get("generated_audio_path")
+            if not audio_path:
+                raise HTTPException(status_code=400, detail=f"Item has no generated audio: {metadata.get('extraction_id')}")
+            source_paths.append(Path(str(audio_path)))
+
+        merge_id = f"merge-{uuid4().hex[:12]}"
+        save_dir = _extraction_metadata_root() / merge_id
+        output_path = save_dir / f"{merge_id}.{request.output_format}"
+        metadata_path = save_dir / "extraction.json"
+        created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
+        label = request.label.strip()
+        try:
+            merge_audio_files(source_paths, output_path, request.output_format)
+            probe = probe_audio(output_path)
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        metadata = {
+            "extraction_id": merge_id,
+            "type": "merge",
+            "status": "complete",
+            "message": "Merge complete.",
+            "created_at": created_at,
+            "label": label,
+            "track_name": label,
+            "output_format": request.output_format,
+            "generated_audio_path": str(output_path),
+            "generated_metadata_path": str(metadata_path),
+            "metadata_path": str(metadata_path),
+            "source_extraction_ids": request.extraction_ids,
+            "source_audio_paths": [str(path) for path in source_paths],
+            "source_duration_seconds": probe.duration_seconds,
+            "settings": {
+                "output_format": request.output_format,
+                "source_extraction_ids": request.extraction_ids,
+            },
+        }
+        _write_extraction_metadata(metadata)
+        ui_log.add("info", f"Merged {len(source_paths)} extraction items: {output_path}")
+        return {"extraction": metadata}
 
     @app.post("/api/extractions/source/probe")
     def probe_extraction_source(request: ProbeRequest) -> dict[str, object]:
@@ -284,6 +501,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 "source_format": probe.source_format,
                 "source_duration_seconds": probe.duration_seconds,
                 "track_name": track_name,
+                "label": request.label.strip() if request.label else track_name,
                 "output_format": request.output_format,
                 "metadata_path": str(metadata_path),
             }
@@ -300,6 +518,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             "source_format": probe.source_format,
             "source_duration_seconds": probe.duration_seconds,
             "track_name": track_name,
+            "label": request.label.strip() if request.label else track_name,
             "output_format": request.output_format,
             "generated_audio_path": str(result.output_path),
             "generated_metadata_path": str(result.metadata_path),

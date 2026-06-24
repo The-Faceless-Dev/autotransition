@@ -440,7 +440,7 @@ def test_extract_track_initializes_base_slot_and_uploads_source(tmp_path: Path, 
             assert payload["track_name"] == "vocals"
             assert payload["audio_format"] == "flac"
             assert payload["inference_steps"] == "80"
-            assert payload["guidance_scale"] == "0.6"
+            assert payload["guidance_scale"] == "1.0"
             assert payload["shift"] == "1.0"
             assert payload["infer_method"] == "sde"
             assert payload["use_tiled_decode"] == "true"
@@ -523,6 +523,55 @@ def test_base_text2music_test_uses_non_turbo_schedule(tmp_path: Path, monkeypatc
     )
 
     assert result.output_path.read_bytes() == b"base-audio"
+    assert not any(call[1].endswith("/v1/init") for call in calls)
+
+
+def test_standalone_text2music_turbo_uses_active_runtime(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    class Response:
+        def __init__(self, body, status_code=200, content=b"") -> None:
+            self._body = body
+            self.status_code = status_code
+            self.content = content
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        calls.append(("get", url, kwargs))
+        if url.endswith("/v1/audio"):
+            return Response({}, content=b"music")
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        if url.endswith("/release_task"):
+            payload = kwargs["json"]
+            assert payload["task_type"] == "text2music"
+            assert payload["prompt"] == "dark music"
+            assert "model" not in payload
+            assert payload["inference_steps"] == 8
+            assert payload["guidance_scale"] == 1.0
+            assert payload["shift"] == 3.0
+            return Response({"data": {"task_id": "task-1"}})
+        if url.endswith("/query_result"):
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "music.flac"}]})
+        return Response({})
+
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(get=fake_get, post=fake_post))
+
+    result = AceStepApiClient(RuntimeConfig()).text2music_standalone(
+        prompt="dark music",
+        model="acestep-v15-turbo",
+        save_dir=tmp_path / "music",
+        inference_steps=8,
+        guidance_scale=1.0,
+        shift=3.0,
+    )
+
+    assert result.output_path.read_bytes() == b"music"
     assert not any(call[1].endswith("/v1/init") for call in calls)
 
 

@@ -24,6 +24,7 @@ NON_TURBO_GUIDANCE_SCALE = 7.0
 NON_TURBO_SHIFT = 1.0
 BASE_RUNTIME_INFERENCE_STEPS = 80
 BASE_RUNTIME_GUIDANCE_SCALE = 0.6
+BASE_EXTRACT_GUIDANCE_SCALE = 1.0
 BASE_RUNTIME_SHIFT = 1.0
 BASE_RUNTIME_INFER_METHOD = "sde"
 BASE_RUNTIME_USE_TILED_DECODE = True
@@ -157,7 +158,7 @@ class AceStepApiClient:
         *,
         audio_format: str = "flac",
         inference_steps: int = BASE_RUNTIME_INFERENCE_STEPS,
-        guidance_scale: float = BASE_RUNTIME_GUIDANCE_SCALE,
+        guidance_scale: float = BASE_EXTRACT_GUIDANCE_SCALE,
         shift: float = BASE_RUNTIME_SHIFT,
         infer_method: str = BASE_RUNTIME_INFER_METHOD,
         use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE,
@@ -245,6 +246,62 @@ class AceStepApiClient:
             "velocity_norm_threshold": velocity_norm_threshold,
             "velocity_ema_factor": velocity_ema_factor,
         }
+        if seed is not None:
+            payload["use_random_seed"] = False
+            payload["seed"] = seed
+        return self._submit_and_wait(payload=payload, save_dir=save_dir, use_json=True)
+
+    def text2music_standalone(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        save_dir: Path,
+        audio_duration: float = 30.0,
+        audio_format: str = "flac",
+        inference_steps: int = 8,
+        guidance_scale: float = TURBO_GUIDANCE_SCALE,
+        shift: float = TURBO_SHIFT,
+        infer_method: str = "ode",
+        use_tiled_decode: bool = True,
+        dcw_enabled: bool = False,
+        velocity_norm_threshold: float = 0.0,
+        velocity_ema_factor: float = 0.0,
+        seed: int | None = None,
+    ) -> RepaintResult:
+        is_base = model == ACE_STEP_BASE_MODEL
+        if is_base:
+            self._ensure_base_extract_model()
+        payload: dict[str, Any] = {
+            "task_type": "text2music",
+            "prompt": prompt,
+            "lyrics": "[Instrumental]",
+            "audio_duration": audio_duration,
+            "audio_format": _raw_text2music_audio_format(audio_format),
+            "batch_size": 1,
+            "inference_steps": inference_steps,
+            "thinking": True,
+            "use_format": False,
+            "time_signature": "4",
+            "bpm": DEFAULT_TEXT2MUSIC_BPM,
+            "key_scale": "",
+            "lm_model_path": DEFAULT_LM_MODEL_PATH,
+            "lm_temperature": 0.85,
+            "lm_cfg_scale": 2.5,
+            "lm_top_p": 0.9,
+            "lm_negative_prompt": "NO USER INPUT",
+            "guidance_scale": guidance_scale,
+            "shift": shift,
+            "infer_method": infer_method,
+            "sampler_mode": "euler",
+            "use_adg": False,
+            "use_tiled_decode": use_tiled_decode,
+            "dcw_enabled": dcw_enabled,
+            "velocity_norm_threshold": velocity_norm_threshold,
+            "velocity_ema_factor": velocity_ema_factor,
+        }
+        if is_base:
+            payload["model"] = ACE_STEP_BASE_MODEL
         if seed is not None:
             payload["use_random_seed"] = False
             payload["seed"] = seed

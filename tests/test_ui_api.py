@@ -184,7 +184,7 @@ def test_ui_run_extraction_writes_history(tmp_path: Path, monkeypatch) -> None:
         *,
         audio_format="flac",
         inference_steps=80,
-        guidance_scale=0.6,
+        guidance_scale=1.0,
         shift=1.0,
         infer_method="sde",
         use_tiled_decode=True,
@@ -198,7 +198,7 @@ def test_ui_run_extraction_writes_history(tmp_path: Path, monkeypatch) -> None:
         assert track_name == "vocals"
         assert audio_format == "flac"
         assert inference_steps == 80
-        assert guidance_scale == 0.6
+        assert guidance_scale == 1.0
         assert shift == 1.0
         assert infer_method == "sde"
         assert use_tiled_decode is True
@@ -292,6 +292,161 @@ def test_ui_base_generation_test_writes_playable_history(tmp_path: Path, monkeyp
     assert item["prompt"] == "dark strings"
     assert Path(item["generated_audio_path"]).exists()
     assert history.json()[0]["extraction_id"] == item["extraction_id"]
+
+
+def write_extraction_metadata(
+    root: Path,
+    extraction_id: str,
+    audio_path: Path,
+    *,
+    item_type: str | None = None,
+    label: str = "Stem",
+) -> Path:
+    import json
+    import datetime as _datetime
+
+    metadata = {
+        "extraction_id": extraction_id,
+        "type": item_type or "extraction",
+        "status": "complete",
+        "message": "Complete.",
+        "created_at": _datetime.datetime.now(_datetime.UTC).isoformat(),
+        "label": label,
+        "track_name": label.lower(),
+        "source_path": str(root / "source.wav"),
+        "generated_audio_path": str(audio_path),
+        "metadata_path": str(root / extraction_id / "extraction.json"),
+    }
+    path = root / extraction_id / "extraction.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return path
+
+
+def test_ui_extraction_rename_updates_metadata(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    audio = make_wav(tmp_path / "vocals.wav", duration_ms=500)
+    metadata_path = write_extraction_metadata(tmp_path / "data" / "extractions", "extraction-a", audio)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post("/api/extractions/extraction-a/rename", json={"label": "Lead vocal"})
+
+    assert response.status_code == 200
+    assert response.json()["extraction"]["label"] == "Lead vocal"
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["label"] == "Lead vocal"
+
+
+def test_ui_merge_extractions_writes_playable_history(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "data" / "extractions"
+    first = make_wav(tmp_path / "vocals.wav", duration_ms=500)
+    second = make_wav(tmp_path / "drums.wav", duration_ms=700)
+    write_extraction_metadata(root, "extraction-vocals", first, label="Vocals")
+    write_extraction_metadata(root, "extraction-drums", second, label="Drums")
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/extractions/merge",
+        json={
+            "extraction_ids": ["extraction-vocals", "extraction-drums"],
+            "label": "Vocals and drums",
+            "output_format": "flac",
+        },
+    )
+    history = client.get("/api/extractions")
+
+    assert response.status_code == 200
+    item = response.json()["extraction"]
+    assert item["type"] == "merge"
+    assert item["label"] == "Vocals and drums"
+    assert item["source_extraction_ids"] == ["extraction-vocals", "extraction-drums"]
+    assert Path(item["generated_audio_path"]).exists()
+    assert history.json()[0]["extraction_id"] == item["extraction_id"]
+
+
+def test_ui_merge_rejects_base_test_items(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "data" / "extractions"
+    first = make_wav(tmp_path / "vocals.wav", duration_ms=500)
+    second = make_wav(tmp_path / "base.wav", duration_ms=500)
+    write_extraction_metadata(root, "extraction-vocals", first, label="Vocals")
+    write_extraction_metadata(root, "base-test-a", second, item_type="base_test", label="Base test")
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.post(
+        "/api/extractions/merge",
+        json={
+            "extraction_ids": ["extraction-vocals", "base-test-a"],
+            "label": "Bad merge",
+            "output_format": "flac",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Base Test" in response.json()["detail"]
+
+
+def test_ui_music_generation_runs_and_records_history(tmp_path: Path, monkeypatch) -> None:
+    from autotransition.models.acestep_api import AceStepApiClient
+    from autotransition.models.base import RepaintResult
+
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    def fake_music(
+        self,
+        *,
+        prompt,
+        model,
+        save_dir,
+        audio_duration=30.0,
+        audio_format="flac",
+        inference_steps=8,
+        guidance_scale=1.0,
+        shift=3.0,
+        infer_method="ode",
+        use_tiled_decode=True,
+        dcw_enabled=False,
+        velocity_norm_threshold=0.0,
+        velocity_ema_factor=0.0,
+        seed=None,
+    ):
+        assert prompt == "dark music"
+        assert model == "acestep-v15-turbo"
+        assert audio_duration == 30.0
+        assert inference_steps == 8
+        assert guidance_scale == 1.0
+        output = save_dir / "music.flac"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"audio")
+        metadata = save_dir / "ace.json"
+        metadata.write_text("{}", encoding="utf-8")
+        return RepaintResult(output_path=output, metadata_path=metadata, model_name="ACE-Step API")
+
+    monkeypatch.setattr(AceStepApiClient, "text2music_standalone", fake_music)
+
+    response = client.post(
+        "/api/music-generations/run",
+        json={
+            "prompt": "dark music",
+            "model": "acestep-v15-turbo",
+            "label": "Dark cue",
+            "audio_duration": 30,
+            "inference_steps": 8,
+            "guidance_scale": 1.0,
+            "shift": 3.0,
+        },
+    )
+    history = client.get("/api/music-generations")
+
+    assert response.status_code == 200
+    item = response.json()["generation"]
+    assert item["status"] == "complete"
+    assert item["label"] == "Dark cue"
+    assert Path(item["generated_audio_path"]).exists()
+    assert history.json()[0]["generation_id"] == item["generation_id"]
 
 
 def test_ui_selection_scaffold_uses_configured_future_length(tmp_path: Path) -> None:

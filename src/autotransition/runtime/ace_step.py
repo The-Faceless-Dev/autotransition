@@ -117,7 +117,7 @@ def apply_runtime_api_diagnostic_patch(config: RuntimeConfig = RuntimeConfig()) 
 
     ACE-Step's Gradio path already passes these fields into GenerationParams,
     but the lightweight /release_task API currently omits a few of them.
-    Autotransition uses this only for the Base Test panel.
+    Autotransition uses this for Base-model generation diagnostics.
     """
 
     runtime_dir = config.ace_step_dir

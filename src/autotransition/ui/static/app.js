@@ -9,6 +9,7 @@ const state = {
   isGenerating: false,
   advancedDirty: false,
   generatedResults: [],
+  musicResults: [],
   extractionTracks: [],
   extractionResults: [],
   extractSourceProbe: null,
@@ -17,8 +18,10 @@ const state = {
 const el = {
   transitionTabButton: document.querySelector("#transitionTabButton"),
   extractionTabButton: document.querySelector("#extractionTabButton"),
+  musicTabButton: document.querySelector("#musicTabButton"),
   transitionPage: document.querySelector("#transitionPage"),
   extractionPage: document.querySelector("#extractionPage"),
+  musicPage: document.querySelector("#musicPage"),
   ffmpegBadge: document.querySelector("#ffmpegBadge"),
   modelCountBadge: document.querySelector("#modelCountBadge"),
   runtimeBadge: document.querySelector("#runtimeBadge"),
@@ -77,6 +80,7 @@ const el = {
   extractSourceAudio: document.querySelector("#extractSourceAudio"),
   extractSourceFormatReadout: document.querySelector("#extractSourceFormatReadout"),
   extractTrackSelect: document.querySelector("#extractTrackSelect"),
+  extractLabelInput: document.querySelector("#extractLabelInput"),
   extractOutputFormat: document.querySelector("#extractOutputFormat"),
   extractSeedInput: document.querySelector("#extractSeedInput"),
   extractInferenceSteps: document.querySelector("#extractInferenceSteps"),
@@ -86,23 +90,34 @@ const el = {
   runExtractionButton: document.querySelector("#runExtractionButton"),
   refreshExtractionsButton: document.querySelector("#refreshExtractionsButton"),
   extractActionState: document.querySelector("#extractActionState"),
-  baseTestState: document.querySelector("#baseTestState"),
-  baseTestPrompt: document.querySelector("#baseTestPrompt"),
-  baseTestDuration: document.querySelector("#baseTestDuration"),
-  baseTestInferenceSteps: document.querySelector("#baseTestInferenceSteps"),
-  baseTestGuidanceScale: document.querySelector("#baseTestGuidanceScale"),
-  baseTestShift: document.querySelector("#baseTestShift"),
-  baseTestInferMethod: document.querySelector("#baseTestInferMethod"),
-  baseTestUseTiledDecode: document.querySelector("#baseTestUseTiledDecode"),
-  baseTestDcwEnabled: document.querySelector("#baseTestDcwEnabled"),
-  baseTestVelocityNormThreshold: document.querySelector("#baseTestVelocityNormThreshold"),
-  baseTestVelocityEmaFactor: document.querySelector("#baseTestVelocityEmaFactor"),
-  baseTestSeed: document.querySelector("#baseTestSeed"),
-  runBaseTestButton: document.querySelector("#runBaseTestButton"),
+  mergeLabelInput: document.querySelector("#mergeLabelInput"),
+  mergeOutputFormat: document.querySelector("#mergeOutputFormat"),
+  mergeExtractionsButton: document.querySelector("#mergeExtractionsButton"),
   extractionActivity: document.querySelector("#extractionActivity"),
   extractionList: document.querySelector("#extractionList"),
   extractRuntimeState: document.querySelector("#extractRuntimeState"),
   extractLogList: document.querySelector("#extractLogList"),
+  musicActionState: document.querySelector("#musicActionState"),
+  musicModelState: document.querySelector("#musicModelState"),
+  musicPrompt: document.querySelector("#musicPrompt"),
+  musicLabelInput: document.querySelector("#musicLabelInput"),
+  musicModelSelect: document.querySelector("#musicModelSelect"),
+  musicOutputFormat: document.querySelector("#musicOutputFormat"),
+  musicDuration: document.querySelector("#musicDuration"),
+  musicSeed: document.querySelector("#musicSeed"),
+  musicInferenceSteps: document.querySelector("#musicInferenceSteps"),
+  musicGuidanceScale: document.querySelector("#musicGuidanceScale"),
+  musicShift: document.querySelector("#musicShift"),
+  musicInferMethod: document.querySelector("#musicInferMethod"),
+  musicUseTiledDecode: document.querySelector("#musicUseTiledDecode"),
+  musicDcwEnabled: document.querySelector("#musicDcwEnabled"),
+  musicVelocityNormThreshold: document.querySelector("#musicVelocityNormThreshold"),
+  musicVelocityEmaFactor: document.querySelector("#musicVelocityEmaFactor"),
+  runMusicButton: document.querySelector("#runMusicButton"),
+  refreshMusicButton: document.querySelector("#refreshMusicButton"),
+  musicActivity: document.querySelector("#musicActivity"),
+  musicList: document.querySelector("#musicList"),
+  musicLogList: document.querySelector("#musicLogList"),
   toast: document.querySelector("#toast"),
 };
 
@@ -150,6 +165,15 @@ function option(label, value) {
   item.value = value;
   item.textContent = label;
   return item;
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function applyPreset(preset) {
@@ -251,6 +275,7 @@ function renderRuntime(runtime) {
 function renderLogs(logs) {
   renderLogList(el.logList, logs);
   renderLogList(el.extractLogList, logs);
+  renderLogList(el.musicLogList, logs);
 }
 
 function renderLogList(node, logs) {
@@ -267,11 +292,25 @@ function renderLogList(node, logs) {
 }
 
 function setActivePage(page) {
-  const extraction = page === "extraction";
-  el.transitionPage.classList.toggle("active", !extraction);
-  el.extractionPage.classList.toggle("active", extraction);
-  el.transitionTabButton.classList.toggle("active", !extraction);
-  el.extractionTabButton.classList.toggle("active", extraction);
+  el.transitionPage.classList.toggle("active", page === "transition");
+  el.extractionPage.classList.toggle("active", page === "extraction");
+  el.musicPage.classList.toggle("active", page === "music");
+  el.transitionTabButton.classList.toggle("active", page === "transition");
+  el.extractionTabButton.classList.toggle("active", page === "extraction");
+  el.musicTabButton.classList.toggle("active", page === "music");
+}
+
+function applyMusicModelDefaults() {
+  const base = el.musicModelSelect.value === "acestep-v15-base";
+  el.musicInferenceSteps.value = base ? "80" : "8";
+  el.musicGuidanceScale.value = base ? "0.6" : "1";
+  el.musicShift.value = base ? "1" : "3";
+  el.musicInferMethod.value = base ? "sde" : "ode";
+  el.musicUseTiledDecode.checked = true;
+  el.musicDcwEnabled.checked = false;
+  el.musicVelocityNormThreshold.value = "0";
+  el.musicVelocityEmaFactor.value = "0";
+  setPill(el.musicModelState, base ? "Base" : "Turbo", "neutral");
 }
 
 function activityTone(phase) {
@@ -392,34 +431,152 @@ function renderExtractionList() {
   state.extractionResults.forEach((item, index) => {
     const row = document.createElement("article");
     row.className = "generated-item";
+    row.dataset.extractionId = item.extraction_id || "";
     const outputPath = item.generated_audio_path || "";
-    const itemType = item.type === "base_test" ? "Base test" : "Extraction";
+    const canMerge = item.type !== "base_test" && item.status === "complete" && outputPath;
+    const itemType = item.type === "base_test" ? "Base test" : item.type === "merge" ? "Merge" : "Extraction";
     const sourceLabel = item.type === "base_test" ? "Prompt" : "Source";
     const sourceValue = item.type === "base_test" ? item.prompt || "" : item.source_path || "";
+    const displayLabel = item.label || item.track_name || itemType;
     const audio = outputPath
       ? `<audio controls preload="metadata" src="/api/extractions/audio?path=${encodeURIComponent(outputPath)}"></audio>`
       : `<div class="empty-result">No playable audio for this extraction.</div>`;
+    const mergeControl = canMerge
+      ? `<label class="merge-select"><input class="merge-select-input" type="checkbox" value="${escapeHtml(item.extraction_id)}" /> Select for merge</label>`
+      : "";
+    const renameControl = item.type !== "base_test"
+      ? `
+        <div class="rename-row">
+          <input class="rename-input" type="text" value="${escapeHtml(displayLabel)}" aria-label="Extraction label" />
+          <button class="rename-button secondary-button" type="button">Save Label</button>
+        </div>
+      `
+      : "";
     row.innerHTML = `
       <div class="generated-title">
-        <strong>${index === 0 ? "Latest" : itemType} - ${item.status}</strong>
-        <span>${item.track_name || "track"}</span>
+        <strong>${index === 0 ? "Latest" : itemType} - ${escapeHtml(item.status)}</strong>
+        <span>${escapeHtml(displayLabel)}</span>
+      </div>
+      ${mergeControl}
+      ${renameControl}
+      ${audio}
+      <dl class="path-list">
+        <dt>Type</dt><dd>${escapeHtml(itemType)}</dd>
+        <dt>Message</dt><dd>${escapeHtml(item.message || "")}</dd>
+        <dt>${escapeHtml(sourceLabel)}</dt><dd>${escapeHtml(sourceValue)}</dd>
+        <dt>Track</dt><dd>${escapeHtml(item.track_name || "")}</dd>
+        <dt>Output</dt><dd>${escapeHtml(outputPath || "None")}</dd>
+        <dt>Metadata</dt><dd>${escapeHtml(item.metadata_path || "")}</dd>
+      </dl>
+    `;
+    const renameButton = row.querySelector(".rename-button");
+    if (renameButton) {
+      renameButton.addEventListener("click", () => renameExtraction(item.extraction_id, row));
+    }
+    el.extractionList.appendChild(row);
+  });
+}
+
+function renderMusicList() {
+  el.musicList.replaceChildren();
+  if (!state.musicResults.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No music generations yet.";
+    el.musicList.appendChild(empty);
+    return;
+  }
+
+  state.musicResults.forEach((item, index) => {
+    const row = document.createElement("article");
+    row.className = "generated-item";
+    const outputPath = item.generated_audio_path || "";
+    const audio = outputPath
+      ? `<audio controls preload="metadata" src="/api/music-generations/audio?path=${encodeURIComponent(outputPath)}"></audio>`
+      : `<div class="empty-result">No playable audio for this generation.</div>`;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${index === 0 ? "Latest" : "Music"} - ${escapeHtml(item.status)}</strong>
+        <span>${escapeHtml(item.label || item.model || "music")}</span>
       </div>
       ${audio}
       <dl class="path-list">
-        <dt>Message</dt><dd>${item.message || ""}</dd>
-        <dt>${sourceLabel}</dt><dd>${sourceValue}</dd>
-        <dt>Track</dt><dd>${item.track_name || ""}</dd>
-        <dt>Output</dt><dd>${outputPath || "None"}</dd>
-        <dt>Metadata</dt><dd>${item.metadata_path || ""}</dd>
+        <dt>Message</dt><dd>${escapeHtml(item.message || "")}</dd>
+        <dt>Model</dt><dd>${escapeHtml(item.model || "")}</dd>
+        <dt>Prompt</dt><dd>${escapeHtml(item.prompt || "")}</dd>
+        <dt>Output</dt><dd>${escapeHtml(outputPath || "None")}</dd>
+        <dt>Metadata</dt><dd>${escapeHtml(item.metadata_path || "")}</dd>
       </dl>
     `;
-    el.extractionList.appendChild(row);
+    el.musicList.appendChild(row);
   });
+}
+
+async function renameExtraction(extractionId, row) {
+  const input = row.querySelector(".rename-input");
+  const label = input ? input.value.trim() : "";
+  if (!label) {
+    showToast("Enter a label");
+    return;
+  }
+  try {
+    const response = await api(`/api/extractions/${encodeURIComponent(extractionId)}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    });
+    const index = state.extractionResults.findIndex((item) => item.extraction_id === extractionId);
+    if (index >= 0) state.extractionResults[index] = response.extraction;
+    renderExtractionList();
+    showToast("Label saved");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function mergeSelectedExtractions() {
+  const ids = Array.from(el.extractionList.querySelectorAll(".merge-select-input:checked")).map((node) => node.value);
+  const label = el.mergeLabelInput.value.trim();
+  if (ids.length < 2) {
+    showToast("Select at least two extraction items");
+    return;
+  }
+  if (!label) {
+    showToast("Enter a merge label");
+    return;
+  }
+  el.mergeExtractionsButton.disabled = true;
+  el.extractionActivity.innerHTML = "<strong>Merging</strong><br>Combining selected extraction outputs.";
+  try {
+    const response = await api("/api/extractions/merge", {
+      method: "POST",
+      body: JSON.stringify({
+        extraction_ids: ids,
+        label,
+        output_format: el.mergeOutputFormat.value,
+      }),
+    });
+    state.extractionResults.unshift(response.extraction);
+    state.extractionResults = state.extractionResults.slice(0, 24);
+    renderExtractionList();
+    el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Merge finished.";
+    showToast("Merge complete");
+  } catch (error) {
+    el.extractionActivity.innerHTML = `<strong>Error</strong><br>${escapeHtml(error.message)}`;
+    showToast(error.message);
+  } finally {
+    el.mergeExtractionsButton.disabled = false;
+    refreshLogs();
+  }
 }
 
 async function refreshExtractions() {
   state.extractionResults = await api("/api/extractions");
   renderExtractionList();
+}
+
+async function refreshMusicGenerations() {
+  state.musicResults = await api("/api/music-generations");
+  renderMusicList();
 }
 
 function addGeneratedResult(result, plan) {
@@ -429,25 +586,29 @@ function addGeneratedResult(result, plan) {
 }
 
 async function loadAll() {
-  const [status, runtime, presets, models, tracks, extractions, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
     api("/api/models"),
     api("/api/extractions/tracks"),
     api("/api/extractions"),
+    api("/api/music-generations"),
     api("/api/logs"),
   ]);
   state.presets = presets;
   state.models = models;
   state.extractionTracks = tracks;
   state.extractionResults = extractions;
+  state.musicResults = musicGenerations;
   renderStatus(status);
   renderRuntime(runtime);
   renderPresets();
   renderModels();
   renderExtractionTracks();
   renderExtractionList();
+  applyMusicModelDefaults();
+  renderMusicList();
   renderLogs(logs);
 }
 
@@ -655,6 +816,7 @@ async function runExtraction() {
       body: JSON.stringify({
         source_path: el.extractSourcePath.value.trim(),
         track_name: el.extractTrackSelect.value,
+        label: el.extractLabelInput.value.trim() || null,
         output_format: el.extractOutputFormat.value,
         inference_steps: numericValue(el.extractInferenceSteps),
         guidance_scale: numericValue(el.extractGuidanceScale),
@@ -684,49 +846,52 @@ async function runExtraction() {
   }
 }
 
-async function runBaseTest() {
-  const prompt = el.baseTestPrompt.value.trim();
+async function runMusicGeneration() {
+  const prompt = el.musicPrompt.value.trim();
   if (!prompt) {
-    showToast("Enter a Base test prompt");
+    showToast("Enter a music prompt");
     return;
   }
-  setPill(el.baseTestState, "Generating", "warn");
-  el.extractionActivity.innerHTML = "<strong>Starting</strong><br>Preparing ACE-Step Base text-to-music test.";
-  el.runBaseTestButton.disabled = true;
+  setPill(el.musicActionState, "Generating", "warn");
+  el.musicActivity.innerHTML = "<strong>Starting</strong><br>Preparing ACE-Step text-to-music request.";
+  el.runMusicButton.disabled = true;
   try {
-    const response = await api("/api/extractions/base-test", {
+    const response = await api("/api/music-generations/run", {
       method: "POST",
       body: JSON.stringify({
         prompt,
-        audio_duration: numericValue(el.baseTestDuration),
-        inference_steps: numericValue(el.baseTestInferenceSteps),
-        guidance_scale: numericValue(el.baseTestGuidanceScale),
-        shift: numericValue(el.baseTestShift),
-        infer_method: el.baseTestInferMethod.value,
-        use_tiled_decode: el.baseTestUseTiledDecode.checked,
-        dcw_enabled: el.baseTestDcwEnabled.checked,
-        velocity_norm_threshold: numericValue(el.baseTestVelocityNormThreshold),
-        velocity_ema_factor: numericValue(el.baseTestVelocityEmaFactor),
-        seed: numericValue(el.baseTestSeed),
+        model: el.musicModelSelect.value,
+        label: el.musicLabelInput.value.trim() || null,
+        output_format: el.musicOutputFormat.value,
+        audio_duration: numericValue(el.musicDuration),
+        inference_steps: numericValue(el.musicInferenceSteps),
+        guidance_scale: numericValue(el.musicGuidanceScale),
+        shift: numericValue(el.musicShift),
+        infer_method: el.musicInferMethod.value,
+        use_tiled_decode: el.musicUseTiledDecode.checked,
+        dcw_enabled: el.musicDcwEnabled.checked,
+        velocity_norm_threshold: numericValue(el.musicVelocityNormThreshold),
+        velocity_ema_factor: numericValue(el.musicVelocityEmaFactor),
+        seed: numericValue(el.musicSeed),
       }),
     });
-    state.extractionResults.unshift(response.extraction);
-    state.extractionResults = state.extractionResults.slice(0, 24);
-    renderExtractionList();
-    if (response.extraction.status === "complete") {
-      setPill(el.baseTestState, "Complete", "ok");
-      el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Base text-to-music test finished.";
+    state.musicResults.unshift(response.generation);
+    state.musicResults = state.musicResults.slice(0, 24);
+    renderMusicList();
+    if (response.generation.status === "complete") {
+      setPill(el.musicActionState, "Complete", "ok");
+      el.musicActivity.innerHTML = "<strong>Complete</strong><br>Music generation finished.";
     } else {
-      setPill(el.baseTestState, "Failed", "error");
-      el.extractionActivity.innerHTML = `<strong>Failed</strong><br>${response.extraction.message}`;
+      setPill(el.musicActionState, "Failed", "error");
+      el.musicActivity.innerHTML = `<strong>Failed</strong><br>${escapeHtml(response.generation.message)}`;
     }
-    showToast(response.extraction.message);
+    showToast(response.generation.message);
   } catch (error) {
-    setPill(el.baseTestState, "Error", "error");
-    el.extractionActivity.innerHTML = `<strong>Error</strong><br>${error.message}`;
+    setPill(el.musicActionState, "Error", "error");
+    el.musicActivity.innerHTML = `<strong>Error</strong><br>${escapeHtml(error.message)}`;
     showToast(error.message);
   } finally {
-    el.runBaseTestButton.disabled = false;
+    el.runMusicButton.disabled = false;
     refreshLogs();
   }
 }
@@ -820,13 +985,20 @@ async function refreshStatus() {
 
 el.transitionTabButton.addEventListener("click", () => setActivePage("transition"));
 el.extractionTabButton.addEventListener("click", () => setActivePage("extraction"));
+el.musicTabButton.addEventListener("click", () => setActivePage("music"));
 el.generateButton.addEventListener("click", generateTransition);
 el.loadSourceButton.addEventListener("click", loadSource);
 el.sourceFile.addEventListener("change", uploadSourceFile);
 el.loadExtractSourceButton.addEventListener("click", loadExtractionSource);
 el.extractSourceFile.addEventListener("change", uploadExtractionSourceFile);
 el.runExtractionButton.addEventListener("click", runExtraction);
-el.runBaseTestButton.addEventListener("click", runBaseTest);
+el.mergeExtractionsButton.addEventListener("click", mergeSelectedExtractions);
+el.runMusicButton.addEventListener("click", runMusicGeneration);
+el.musicModelSelect.addEventListener("change", applyMusicModelDefaults);
+el.refreshMusicButton.addEventListener("click", async () => {
+  await refreshMusicGenerations();
+  showToast("Music generations refreshed");
+});
 el.refreshExtractionsButton.addEventListener("click", async () => {
   await refreshExtractions();
   showToast("Extractions refreshed");

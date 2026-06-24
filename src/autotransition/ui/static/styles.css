@@ -450,6 +450,46 @@ button:disabled {
   accent-color: var(--accent);
 }
 
+.merge-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(130px, 0.6fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 12px 0;
+}
+
+.merge-controls .field {
+  margin-bottom: 0;
+}
+
+.merge-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.merge-select input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.rename-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.rename-button {
+  min-height: 40px;
+}
+
 .generated-actions {
   justify-content: flex-start;
   margin: 2px 0 10px;

@@ -22,6 +22,7 @@
     <nav class="tabbar" aria-label="Workspace">
       <button id="transitionTabButton" class="tab-button active" type="button">Autotransition</button>
       <button id="extractionTabButton" class="tab-button" type="button">Track Extraction</button>
+      <button id="musicTabButton" class="tab-button" type="button">Music Generation</button>
     </nav>
 
     <main id="transitionPage" class="workspace app-page active">
@@ -209,6 +210,116 @@
       </aside>
     </main>
 
+    <main id="musicPage" class="workspace app-page">
+      <section class="panel workflow-panel">
+        <div class="panel-heading">
+          <h2>Prompt</h2>
+          <span id="musicActionState" class="mini-state">Ready</span>
+        </div>
+
+        <label class="field">
+          <span>Music prompt</span>
+          <textarea id="musicPrompt" rows="8" placeholder="suspenseful cinematic horror theme, dark ambient strings, low percussion"></textarea>
+        </label>
+
+        <div class="control-grid">
+          <label class="field">
+            <span>Label</span>
+            <input id="musicLabelInput" type="text" placeholder="optional name" />
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <select id="musicModelSelect">
+              <option value="acestep-v15-turbo" selected>ACE-Step 1.5 XL Turbo</option>
+              <option value="acestep-v15-base">ACE-Step 1.5 Base</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Output format</span>
+            <select id="musicOutputFormat">
+              <option value="flac">FLAC</option>
+              <option value="wav">WAV</option>
+              <option value="wav32">WAV 32-bit</option>
+              <option value="mp3">MP3</option>
+              <option value="opus">Opus</option>
+              <option value="aac">AAC</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Duration seconds</span>
+            <input id="musicDuration" type="number" min="10" max="120" step="1" value="30" />
+          </label>
+          <label class="field">
+            <span>Seed</span>
+            <input id="musicSeed" type="number" step="1" placeholder="optional" />
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button id="runMusicButton" class="primary-button" type="button">Generate Music</button>
+          <button id="refreshMusicButton" class="secondary-button" type="button">Refresh Generations</button>
+        </div>
+
+        <div class="output-block">
+          <h3>Music Output</h3>
+          <div id="musicActivity" class="activity-readout">No music generation running.</div>
+          <div id="musicList" class="generated-list">
+            <div class="empty-result">No music generations yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Generation Settings</h2>
+            <span id="musicModelState" class="mini-state">Turbo</span>
+          </div>
+          <div class="control-grid">
+            <label class="field">
+              <span>Inference steps</span>
+              <input id="musicInferenceSteps" type="number" min="1" max="200" step="1" value="8" />
+            </label>
+            <label class="field">
+              <span>Guidance scale</span>
+              <input id="musicGuidanceScale" type="number" min="0" step="0.1" value="1" />
+            </label>
+            <label class="field">
+              <span>Shift</span>
+              <input id="musicShift" type="number" min="0" step="0.1" value="3" />
+            </label>
+            <label class="field">
+              <span>Infer method</span>
+              <select id="musicInferMethod">
+                <option value="ode" selected>ODE</option>
+                <option value="sde">SDE</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Velocity norm threshold</span>
+              <input id="musicVelocityNormThreshold" type="number" min="0" step="0.1" value="0" />
+            </label>
+            <label class="field">
+              <span>Velocity EMA factor</span>
+              <input id="musicVelocityEmaFactor" type="number" min="0" max="1" step="0.05" value="0" />
+            </label>
+          </div>
+          <div class="toggle-row">
+            <label><input id="musicUseTiledDecode" type="checkbox" checked /> Tiled decode</label>
+            <label><input id="musicDcwEnabled" type="checkbox" /> DCW</label>
+          </div>
+        </section>
+
+        <section class="panel logs-panel">
+          <div class="panel-heading">
+            <h2>Logs</h2>
+            <span class="mini-state">Local</span>
+          </div>
+          <ol id="musicLogList" class="log-list"></ol>
+        </section>
+      </aside>
+    </main>
+
     <main id="extractionPage" class="workspace app-page">
       <section class="panel workflow-panel">
         <div class="panel-heading">
@@ -251,6 +362,10 @@
             <select id="extractTrackSelect"></select>
           </label>
           <label class="field">
+            <span>Label</span>
+            <input id="extractLabelInput" type="text" placeholder="optional name" />
+          </label>
+          <label class="field">
             <span>Output format</span>
             <select id="extractOutputFormat">
               <option value="flac">FLAC</option>
@@ -271,7 +386,7 @@
           </label>
           <label class="field">
             <span>Guidance scale</span>
-            <input id="extractGuidanceScale" type="number" min="0" step="0.1" value="0.6" />
+            <input id="extractGuidanceScale" type="number" min="0" step="0.1" value="1.0" />
           </label>
           <label class="field">
             <span>Shift</span>
@@ -292,6 +407,24 @@
         <div class="output-block">
           <h3>Extraction Output</h3>
           <div id="extractionActivity" class="activity-readout">No extraction running.</div>
+          <div class="merge-controls">
+            <label class="field">
+              <span>Merge label</span>
+              <input id="mergeLabelInput" type="text" placeholder="Full mix, instrumental, custom stem blend" />
+            </label>
+            <label class="field">
+              <span>Merge format</span>
+              <select id="mergeOutputFormat">
+                <option value="flac">FLAC</option>
+                <option value="wav">WAV</option>
+                <option value="wav32">WAV 32-bit</option>
+                <option value="mp3">MP3</option>
+                <option value="opus">Opus</option>
+                <option value="aac">AAC</option>
+              </select>
+            </label>
+            <button id="mergeExtractionsButton" class="secondary-button" type="button">Merge Selected</button>
+          </div>
           <div id="extractionList" class="generated-list">
             <div class="empty-result">No extractions yet.</div>
           </div>
@@ -299,65 +432,6 @@
       </section>
 
       <aside class="side-stack">
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>Base Test</h2>
-            <span id="baseTestState" class="mini-state">Ready</span>
-          </div>
-
-          <label class="field">
-            <span>Prompt</span>
-            <textarea id="baseTestPrompt" rows="3" placeholder="suspenseful cinematic horror theme, dark ambient strings, low percussion"></textarea>
-          </label>
-
-          <div class="control-grid">
-            <label class="field">
-              <span>Duration seconds</span>
-              <input id="baseTestDuration" type="number" min="10" max="120" step="1" value="30" />
-            </label>
-            <label class="field">
-              <span>Inference steps</span>
-              <input id="baseTestInferenceSteps" type="number" min="1" max="200" step="1" value="80" />
-            </label>
-            <label class="field">
-              <span>Guidance scale</span>
-              <input id="baseTestGuidanceScale" type="number" min="0" step="0.1" value="0.6" />
-            </label>
-            <label class="field">
-              <span>Shift</span>
-              <input id="baseTestShift" type="number" min="0" step="0.1" value="1" />
-            </label>
-            <label class="field">
-              <span>Infer method</span>
-              <select id="baseTestInferMethod">
-                <option value="ode">ODE</option>
-                <option value="sde" selected>SDE</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Velocity norm threshold</span>
-              <input id="baseTestVelocityNormThreshold" type="number" min="0" step="0.1" value="0" />
-            </label>
-            <label class="field">
-              <span>Velocity EMA factor</span>
-              <input id="baseTestVelocityEmaFactor" type="number" min="0" max="1" step="0.05" value="0" />
-            </label>
-            <label class="field">
-              <span>Seed</span>
-              <input id="baseTestSeed" type="number" step="1" placeholder="optional" />
-            </label>
-          </div>
-
-          <div class="toggle-row">
-            <label><input id="baseTestUseTiledDecode" type="checkbox" checked /> Tiled decode</label>
-            <label><input id="baseTestDcwEnabled" type="checkbox" /> DCW</label>
-          </div>
-
-          <div class="button-row">
-            <button id="runBaseTestButton" class="secondary-button" type="button">Generate Base Test</button>
-          </div>
-        </section>
-
         <section class="panel">
           <div class="panel-heading">
             <h2>ACE Runtime</h2>
