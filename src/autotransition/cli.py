@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 
 import typer
 
 from autotransition.audio import build_repaint_scaffold
+from autotransition.audio.ffmpeg import resolve_ffmpeg
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.models import (
     ACE_STEP_MODELS,
@@ -45,6 +47,33 @@ def presets() -> None:
 
     for preset in PRESETS.values():
         typer.echo(f"{preset.slug}: {preset.name} - {preset.description}")
+
+
+@app.command("doctor")
+def doctor_all(
+    runtime_dir: Path = typer.Option(Path("runtimes/ACE-Step-1.5"), help="ACE-Step runtime install directory."),
+    host: str = typer.Option("127.0.0.1", help="ACE-Step API host."),
+    port: int = typer.Option(8001, help="ACE-Step API port."),
+) -> None:
+    """Check Autotransition dependencies and ACE-Step runtime setup."""
+
+    pydub_available = importlib.util.find_spec("pydub") is not None
+    typer.echo(
+        "ok: pydub - pydub is installed."
+        if pydub_available
+        else 'error: pydub - Missing. Run: python -m pip install -e ".[dev]"'
+    )
+
+    ffmpeg = resolve_ffmpeg()
+    typer.echo(
+        f"ok: ffmpeg - ffmpeg resolved at {ffmpeg}."
+        if ffmpeg
+        else 'error: ffmpeg - Missing. Run: python -m pip install -e ".[dev]" or install ffmpeg with conda.'
+    )
+
+    config = RuntimeConfig(ace_step_dir=runtime_dir, api_host=host, api_port=port)
+    for check in runtime_doctor(config):
+        typer.echo(f"{check.status.value}: {check.name} - {check.message}")
 
 
 @app.command()

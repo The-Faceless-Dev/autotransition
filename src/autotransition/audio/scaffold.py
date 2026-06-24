@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autotransition.audio.ffmpeg import configure_pydub_ffmpeg
+from autotransition.audio.ffmpeg import require_pydub
 from autotransition.audio.formats import validate_supported_source
 from autotransition.audio.segments import matching_silence
 
@@ -18,11 +18,7 @@ def build_repaint_scaffold(
 ) -> Path:
     """Write ``tail(source) + silence`` to ``output_path``."""
 
-    try:
-        from pydub import AudioSegment
-    except ImportError as exc:
-        raise RuntimeError("pydub is required to build audio scaffolds. Install the project dependencies.") from exc
-    configure_pydub_ffmpeg()
+    AudioSegment = require_pydub("build audio scaffolds")
 
     if tail_seconds <= 0:
         raise ValueError("tail_seconds must be greater than 0")

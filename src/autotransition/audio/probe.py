@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from autotransition.audio.ffmpeg import configure_pydub_ffmpeg
+from autotransition.audio.ffmpeg import require_pydub
 from autotransition.audio.formats import source_extension, source_format_label, validate_supported_source
 
 
@@ -26,11 +26,7 @@ class AudioProbe:
 
 
 def probe_audio(source_path: Path) -> AudioProbe:
-    try:
-        from pydub import AudioSegment
-    except ImportError as exc:
-        raise RuntimeError("pydub is required to probe audio. Install the project dependencies.") from exc
-    configure_pydub_ffmpeg()
+    AudioSegment = require_pydub("probe audio")
 
     if not source_path.exists():
         raise FileNotFoundError(f"Source audio not found: {source_path}")

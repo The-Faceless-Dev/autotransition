@@ -4,18 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autotransition.audio.ffmpeg import configure_pydub_ffmpeg
+from autotransition.audio.ffmpeg import require_pydub
 from autotransition.audio.formats import validate_supported_source
 
 
 def merge_audio_files(source_paths: list[Path], output_path: Path, output_format: str = "flac") -> Path:
     """Overlay audio files from time zero and write the merged result."""
 
-    try:
-        from pydub import AudioSegment
-    except ImportError as exc:
-        raise RuntimeError("pydub is required to merge audio. Install the project dependencies.") from exc
-    configure_pydub_ffmpeg()
+    AudioSegment = require_pydub("merge audio")
 
     if len(source_paths) < 2:
         raise ValueError("At least two audio files are required for merge.")

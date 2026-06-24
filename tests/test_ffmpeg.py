@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import builtins
 
 from autotransition.audio import ffmpeg as ffmpeg_helpers
 from autotransition.ui.state import system_status
@@ -31,3 +32,24 @@ def test_system_status_uses_resolved_ffmpeg(monkeypatch, tmp_path: Path) -> None
 
     assert status["ffmpeg_available"] is True
     assert status["ffmpeg_path"] == "bundled-ffmpeg"
+
+
+def test_require_pydub_error_includes_package_install_command(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "pydub":
+            raise ImportError("missing pydub")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    try:
+        ffmpeg_helpers.require_pydub("merge audio")
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "pydub is required to merge audio" in message
+        assert 'python -m pip install -e ".[dev]"' in message
+        assert "same environment used for `autotransition run`" in message
+    else:
+        raise AssertionError("Expected missing pydub to raise an actionable error")

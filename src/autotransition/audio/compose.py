@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autotransition.audio.ffmpeg import configure_pydub_ffmpeg
+from autotransition.audio.ffmpeg import require_pydub
 from autotransition.audio.formats import validate_supported_source
 
 
@@ -17,11 +17,7 @@ def build_continuation_composite(
 ) -> Path:
     """Write ``source[:continuation_point] + generated`` to ``output_path``."""
 
-    try:
-        from pydub import AudioSegment
-    except ImportError as exc:
-        raise RuntimeError("pydub is required to compose generated audio. Install the project dependencies.") from exc
-    configure_pydub_ffmpeg()
+    AudioSegment = require_pydub("compose generated audio")
 
     if continuation_point_seconds <= 0:
         raise ValueError("continuation_point_seconds must be greater than 0")

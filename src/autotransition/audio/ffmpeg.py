@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 
 def resolve_ffmpeg() -> str | None:
@@ -34,3 +35,18 @@ def configure_pydub_ffmpeg() -> str | None:
     AudioSegment.converter = ffmpeg_path
     AudioSegment.ffmpeg = ffmpeg_path
     return ffmpeg_path
+
+
+def require_pydub(purpose: str) -> Any:
+    """Import pydub and configure ffmpeg, or raise an actionable error."""
+
+    try:
+        from pydub import AudioSegment
+    except ImportError as exc:
+        raise RuntimeError(
+            f"pydub is required to {purpose}. "
+            'Run `python -m pip install -e ".[dev]"` in the same environment used for `autotransition run`, '
+            "then restart the app."
+        ) from exc
+    configure_pydub_ffmpeg()
+    return AudioSegment
