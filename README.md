@@ -84,6 +84,10 @@ The Audio Editor section embeds a local vendored copy of AudioMass inside Dance 
 
 AudioMass provides browser-side waveform editing, selections, trim/cut/copy/paste workflows, effects, repair tools, recording, export, and multitrack editing with clips, fades, crossfades, mixer controls, session save/open, and mixdown.
 
+The editor can still open files from your device through AudioMass itself. Dance Station also lists prior app outputs in the editor tab, including transitions, music generations, extractions, merges, and saved edits. Each item is shown with its label and category, can be opened directly in AudioMass, and can be relabeled from the asset list.
+
+After exporting from AudioMass, use `Save Edited Result` to store the edited file back into Dance Station under the edits category with a custom name. Saved edits become reusable assets in the same editor list.
+
 Dance Station serves the editor from the same local app at:
 
 ```text

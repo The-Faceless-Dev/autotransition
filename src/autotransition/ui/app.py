@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -221,6 +222,115 @@ def _music_generation_root() -> Path:
     return Path("data/generations")
 
 
+def _transition_root() -> Path:
+    return Path("data/generated")
+
+
+def _edit_root() -> Path:
+    return Path("data/edits")
+
+
+def _safe_item_id(item_id: str, label: str) -> str:
+    safe_id = Path(item_id).name
+    if not safe_id or safe_id != item_id:
+        raise HTTPException(status_code=400, detail=f"Invalid {label} id.")
+    return safe_id
+
+
+def _read_json_file(metadata_path: Path, label: str) -> dict[str, Any]:
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail=f"{label} not found.")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read {label} metadata.") from exc
+    metadata["metadata_path"] = str(metadata_path)
+    return metadata
+
+
+def _transition_metadata_path(generation_id: str) -> Path:
+    return _transition_root() / _safe_item_id(generation_id, "transition") / "result.json"
+
+
+def _music_metadata_path(generation_id: str) -> Path:
+    return _music_generation_root() / _safe_item_id(generation_id, "music generation") / "generation.json"
+
+
+def _edit_metadata_path(edit_id: str) -> Path:
+    return _edit_root() / _safe_item_id(edit_id, "edit") / "edit.json"
+
+
+def _safe_label_stem(label: str, fallback: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("._")
+    return clean or fallback
+
+
+def _asset_from_metadata(metadata: dict[str, Any], category: str, id_key: str) -> dict[str, Any] | None:
+    audio_path = metadata.get("generated_audio_path")
+    if not audio_path:
+        return None
+    path = Path(str(audio_path)).expanduser()
+    if not path.exists() or not path.is_file():
+        return None
+    asset_id = str(metadata.get(id_key) or path.stem)
+    label = str(metadata.get("label") or metadata.get("track_name") or metadata.get("prompt") or asset_id)
+    return {
+        "asset_id": asset_id,
+        "category": category,
+        "label": label,
+        "audio_path": str(path),
+        "audio_url": f"/api/editor/audio?path={quote(str(path))}",
+        "created_at": metadata.get("created_at") or "",
+        "metadata_path": metadata.get("metadata_path") or "",
+        "message": metadata.get("message") or "",
+        "source_path": metadata.get("source_path") or "",
+        "source_asset_id": metadata.get("source_asset_id") or "",
+    }
+
+
+def _list_metadata(root: Path, filename: str) -> list[dict[str, Any]]:
+    if not root.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for metadata_path in root.glob(f"*/{filename}"):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        metadata["metadata_path"] = str(metadata_path)
+        items.append(metadata)
+    return items
+
+
+def _editor_assets() -> list[dict[str, Any]]:
+    assets: list[dict[str, Any]] = []
+
+    for metadata in _list_metadata(_transition_root(), "result.json"):
+        asset = _asset_from_metadata(metadata, "transition", "generation_id")
+        if asset:
+            assets.append(asset)
+
+    for metadata in _list_metadata(_music_generation_root(), "generation.json"):
+        asset = _asset_from_metadata(metadata, "generation", "generation_id")
+        if asset:
+            assets.append(asset)
+
+    for metadata in _list_metadata(_extraction_metadata_root(), "extraction.json"):
+        if metadata.get("type") == "base_test":
+            continue
+        category = "merge" if metadata.get("type") == "merge" else "extraction"
+        asset = _asset_from_metadata(metadata, category, "extraction_id")
+        if asset:
+            assets.append(asset)
+
+    for metadata in _list_metadata(_edit_root(), "edit.json"):
+        asset = _asset_from_metadata(metadata, "edit", "edit_id")
+        if asset:
+            assets.append(asset)
+
+    return sorted(assets, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
     runtime_config = runtime_config or RuntimeConfig()
     app = FastAPI(title="Dance Station", version="0.1.0")
@@ -324,6 +434,79 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     def get_music_generation_audio(path: str = Query(..., min_length=1)) -> FileResponse:
         return get_audio_file(path)
 
+    @app.get("/api/editor/assets")
+    def list_editor_assets() -> list[dict[str, Any]]:
+        return _editor_assets()
+
+    @app.get("/api/editor/audio")
+    def get_editor_audio(path: str = Query(..., min_length=1)) -> FileResponse:
+        return get_audio_file(path)
+
+    @app.get("/api/edits")
+    def list_edits() -> list[dict[str, Any]]:
+        return _list_metadata(_edit_root(), "edit.json")
+
+    @app.get("/api/edits/audio")
+    def get_edit_audio(path: str = Query(..., min_length=1)) -> FileResponse:
+        return get_audio_file(path)
+
+    @app.post("/api/edits")
+    def save_edit(
+        file: UploadFile = File(...),
+        label: str = Form(..., min_length=1, max_length=120),
+        source_asset_id: str | None = Form(None),
+        source_category: str | None = Form(None),
+    ) -> dict[str, object]:
+        import datetime as _datetime
+
+        original_name = Path(file.filename or "edit.wav").name
+        suffix = Path(original_name).suffix.lower() or ".wav"
+        temp_name = f"{_safe_label_stem(label, 'edit')}{suffix}"
+        edit_id = f"edit-{uuid4().hex[:12]}"
+        save_dir = _edit_root() / edit_id
+        output_path = save_dir / temp_name
+        metadata_path = save_dir / "edit.json"
+        created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
+
+        try:
+            validate_supported_source(output_path)
+        except ValueError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with output_path.open("wb") as output:
+                shutil.copyfileobj(file.file, output)
+            probe = probe_audio(output_path)
+        except Exception as exc:
+            if output_path.exists():
+                output_path.unlink()
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            file.file.close()
+
+        metadata = {
+            "edit_id": edit_id,
+            "type": "edit",
+            "status": "complete",
+            "message": "Edit saved.",
+            "created_at": created_at,
+            "label": label.strip(),
+            "original_filename": original_name,
+            "source_asset_id": source_asset_id,
+            "source_category": source_category,
+            "output_format": suffix.lstrip("."),
+            "generated_audio_path": str(output_path),
+            "metadata_path": str(metadata_path),
+            "duration_seconds": probe.duration_seconds,
+            "source_format": probe.source_format,
+        }
+        _write_metadata(metadata_path, metadata)
+        ui_log.add("info", f"Saved edited audio: {output_path}")
+        return {"edit": metadata}
+
     @app.post("/api/music-generations/run")
     def run_music_generation(request: MusicGenerationRequest) -> dict[str, object]:
         import datetime as _datetime
@@ -386,6 +569,33 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         _write_metadata(metadata_path, metadata)
         ui_log.add("info", f"Generated music: {result.output_path}")
         return {"generation": metadata}
+
+    @app.post("/api/music-generations/{generation_id}/rename")
+    def rename_music_generation(generation_id: str, request: ExtractionRenameRequest) -> dict[str, object]:
+        metadata_path = _music_metadata_path(generation_id)
+        metadata = _read_json_file(metadata_path, "Music generation")
+        metadata["label"] = request.label.strip()
+        _write_metadata(metadata_path, metadata)
+        ui_log.add("info", f"Renamed music generation {generation_id}: {metadata['label']}")
+        return {"generation": metadata}
+
+    @app.post("/api/transitions/{generation_id}/rename")
+    def rename_transition(generation_id: str, request: ExtractionRenameRequest) -> dict[str, object]:
+        metadata_path = _transition_metadata_path(generation_id)
+        metadata = _read_json_file(metadata_path, "Transition")
+        metadata["label"] = request.label.strip()
+        _write_metadata(metadata_path, metadata)
+        ui_log.add("info", f"Renamed transition {generation_id}: {metadata['label']}")
+        return {"transition": metadata}
+
+    @app.post("/api/edits/{edit_id}/rename")
+    def rename_edit(edit_id: str, request: ExtractionRenameRequest) -> dict[str, object]:
+        metadata_path = _edit_metadata_path(edit_id)
+        metadata = _read_json_file(metadata_path, "Edit")
+        metadata["label"] = request.label.strip()
+        _write_metadata(metadata_path, metadata)
+        ui_log.add("info", f"Renamed edit {edit_id}: {metadata['label']}")
+        return {"edit": metadata}
 
     @app.post("/api/extractions/{extraction_id}/rename")
     def rename_extraction(extraction_id: str, request: ExtractionRenameRequest) -> dict[str, object]:
@@ -870,7 +1080,10 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.post("/api/generate/from-selection")
     def generate_from_selection(request: GenerateSelectionRequest) -> dict[str, object]:
+        import datetime as _datetime
+
         generation_id = f"generation-{uuid4().hex[:12]}"
+        created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
         try:
             profile = get_model_profile(request.model_slug)
             selected = get_preset(request.preset)
@@ -1022,8 +1235,33 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             generated_audio_path=final_audio_path,
             generated_metadata_path=final_metadata_path,
         )
+        transition_metadata_path = output.generated_dir / generation_id / "result.json"
+        transition_metadata = {
+            **result.to_dict(),
+            "type": "transition",
+            "created_at": created_at,
+            "label": (plan.caption or generation_id)[:80],
+            "caption": plan.caption,
+            "source_path": str(plan.source_path),
+            "source_format": plan.source_format,
+            "continuation_point_seconds": plan.continuation_point_seconds,
+            "new_section_seconds": plan.new_section_seconds,
+            "settings": {
+                "preset": request.preset,
+                "model_slug": profile.slug,
+                "context_seconds": config.context_seconds,
+                "repaint_overlap_seconds": config.repaint_overlap_seconds,
+                "new_section_seconds": config.new_section_seconds,
+                "bpm": config.bpm_hint,
+                "key": config.key_hint,
+                "seed": config.seed,
+                "ace_step": request.ace_step.to_payload() if request.ace_step else None,
+            },
+            "metadata_path": str(transition_metadata_path),
+        }
+        _write_metadata(transition_metadata_path, transition_metadata)
         ui_log.add("info", f"Generated transition: {final_audio_path}")
-        return {"result": result.to_dict(), "plan": plan.to_dict()}
+        return {"result": transition_metadata, "plan": plan.to_dict()}
 
     @app.get("/api/logs")
     def get_logs() -> list[dict[str, str]]:

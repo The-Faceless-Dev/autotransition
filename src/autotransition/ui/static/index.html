@@ -455,11 +455,42 @@
     </main>
 
     <main id="audioEditPage" class="workspace app-page editor-page">
+      <section class="panel editor-assets-panel">
+        <div class="panel-heading">
+          <h2>Dance Station Assets</h2>
+          <span id="editorAssetState" class="mini-state">Loading</span>
+        </div>
+        <div class="control-grid editor-filter-grid">
+          <label class="field">
+            <span>Search</span>
+            <input id="editorAssetSearch" type="text" placeholder="label, category, path" />
+          </label>
+          <label class="field">
+            <span>Category</span>
+            <select id="editorCategoryFilter">
+              <option value="all">All</option>
+              <option value="transition">Transitions</option>
+              <option value="generation">Generations</option>
+              <option value="extraction">Extractions</option>
+              <option value="merge">Merges</option>
+              <option value="edit">Edits</option>
+            </select>
+          </label>
+          <div class="field button-field">
+            <span>Library</span>
+            <button id="refreshEditorAssetsButton" class="secondary-button" type="button">Refresh Assets</button>
+          </div>
+        </div>
+        <div id="editorAssetList" class="editor-asset-list">
+          <div class="empty-result">No Dance Station audio assets yet.</div>
+        </div>
+      </section>
+
       <section class="panel editor-shell">
         <div class="panel-heading editor-heading">
           <div>
             <h2>Audio Editor</h2>
-            <div class="editor-subtitle">AudioMass</div>
+            <div id="editorCurrentAsset" class="editor-subtitle">AudioMass</div>
           </div>
           <div class="button-row">
             <button id="reloadAudioEditorButton" class="secondary-button" type="button">Reload</button>
@@ -473,6 +504,26 @@
           src="/audiomass/"
           allow="autoplay; clipboard-read; clipboard-write; microphone"
         ></iframe>
+      </section>
+
+      <section class="panel editor-save-panel">
+        <div class="panel-heading">
+          <h2>Save Edited Result</h2>
+          <span id="editSaveState" class="mini-state">Ready</span>
+        </div>
+        <label class="field">
+          <span>Edit name</span>
+          <input id="editSaveLabelInput" type="text" placeholder="Edited transition, cleaned vocal, final mix" />
+        </label>
+        <div class="file-picker">
+          <label class="file-button" for="editSaveFile">Choose Exported Audio</label>
+          <input id="editSaveFile" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,audio/*" />
+          <span id="editSaveFileName">No file selected</span>
+        </div>
+        <div id="editSourceAssetReadout" class="summary">No Dance Station source asset selected.</div>
+        <div class="button-row">
+          <button id="saveEditButton" class="primary-button" type="button">Save Edit</button>
+        </div>
       </section>
     </main>
 

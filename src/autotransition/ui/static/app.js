@@ -12,6 +12,8 @@ const state = {
   musicResults: [],
   extractionTracks: [],
   extractionResults: [],
+  editorAssets: [],
+  selectedEditorAsset: null,
   extractSourceProbe: null,
 };
 
@@ -120,9 +122,21 @@ const el = {
   musicActivity: document.querySelector("#musicActivity"),
   musicList: document.querySelector("#musicList"),
   musicLogList: document.querySelector("#musicLogList"),
+  editorAssetState: document.querySelector("#editorAssetState"),
+  editorAssetSearch: document.querySelector("#editorAssetSearch"),
+  editorCategoryFilter: document.querySelector("#editorCategoryFilter"),
+  refreshEditorAssetsButton: document.querySelector("#refreshEditorAssetsButton"),
+  editorAssetList: document.querySelector("#editorAssetList"),
+  editorCurrentAsset: document.querySelector("#editorCurrentAsset"),
   audioEditorFrame: document.querySelector("#audioEditorFrame"),
   reloadAudioEditorButton: document.querySelector("#reloadAudioEditorButton"),
   openAudioEditorButton: document.querySelector("#openAudioEditorButton"),
+  editSaveLabelInput: document.querySelector("#editSaveLabelInput"),
+  editSaveFile: document.querySelector("#editSaveFile"),
+  editSaveFileName: document.querySelector("#editSaveFileName"),
+  editSourceAssetReadout: document.querySelector("#editSourceAssetReadout"),
+  editSaveState: document.querySelector("#editSaveState"),
+  saveEditButton: document.querySelector("#saveEditButton"),
   toast: document.querySelector("#toast"),
 };
 
@@ -313,6 +327,158 @@ function reloadAudioEditor() {
 
 function openAudioEditorWindow() {
   window.open("/audiomass/", "_blank", "noopener");
+}
+
+function assetAudioUrl(asset) {
+  return `/api/editor/audio?path=${encodeURIComponent(asset.audio_path)}`;
+}
+
+function filteredEditorAssets() {
+  const query = el.editorAssetSearch.value.trim().toLowerCase();
+  const category = el.editorCategoryFilter.value;
+  return state.editorAssets.filter((asset) => {
+    if (category !== "all" && asset.category !== category) return false;
+    if (!query) return true;
+    return [asset.label, asset.category, asset.audio_path, asset.message]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+}
+
+function renderEditorAssets() {
+  el.editorAssetList.replaceChildren();
+  const assets = filteredEditorAssets();
+  setPill(el.editorAssetState, `${assets.length} shown`, assets.length ? "ok" : "neutral");
+  if (!assets.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No matching Dance Station audio assets.";
+    el.editorAssetList.appendChild(empty);
+    return;
+  }
+
+  assets.forEach((asset) => {
+    const row = document.createElement("article");
+    row.className = "editor-asset-item";
+    row.dataset.assetId = asset.asset_id;
+    row.innerHTML = `
+      <div class="editor-asset-title">
+        <strong>${escapeHtml(asset.label)}</strong>
+        <span class="category-badge">${escapeHtml(asset.category)}</span>
+      </div>
+      <audio controls preload="metadata" src="${assetAudioUrl(asset)}"></audio>
+      <p class="asset-path">${escapeHtml(asset.audio_path)}</p>
+      <div class="rename-row">
+        <input class="asset-label-input" type="text" value="${escapeHtml(asset.label)}" aria-label="Asset label" />
+        <button class="secondary-button asset-rename-button" type="button">Save Label</button>
+      </div>
+      <div class="button-row generated-actions">
+        <button class="primary-button open-editor-asset-button" type="button">Open in Editor</button>
+      </div>
+    `;
+    row.querySelector(".open-editor-asset-button").addEventListener("click", () => openAssetInEditor(asset));
+    row.querySelector(".asset-rename-button").addEventListener("click", () => renameEditorAsset(asset, row));
+    el.editorAssetList.appendChild(row);
+  });
+}
+
+function openAssetInEditor(asset) {
+  state.selectedEditorAsset = asset;
+  const url = assetAudioUrl(asset);
+  el.audioEditorFrame.src = `/audiomass/?ds_audio=${encodeURIComponent(url)}&ds_name=${encodeURIComponent(asset.label)}`;
+  el.editorCurrentAsset.textContent = `${asset.category}: ${asset.label}`;
+  el.editSourceAssetReadout.innerHTML = [
+    `<strong>${escapeHtml(asset.label)}</strong>`,
+    `Category: ${escapeHtml(asset.category)}`,
+    `Path: ${escapeHtml(asset.audio_path)}`,
+  ].join("<br>");
+  if (!el.editSaveLabelInput.value.trim()) {
+    el.editSaveLabelInput.value = `${asset.label} edit`;
+  }
+  showToast("Loaded asset in Audio Editor");
+}
+
+function renameEndpointForAsset(asset) {
+  if (asset.category === "transition") return `/api/transitions/${encodeURIComponent(asset.asset_id)}/rename`;
+  if (asset.category === "generation") return `/api/music-generations/${encodeURIComponent(asset.asset_id)}/rename`;
+  if (asset.category === "edit") return `/api/edits/${encodeURIComponent(asset.asset_id)}/rename`;
+  if (asset.category === "extraction" || asset.category === "merge") {
+    return `/api/extractions/${encodeURIComponent(asset.asset_id)}/rename`;
+  }
+  return null;
+}
+
+async function renameEditorAsset(asset, row) {
+  const endpoint = renameEndpointForAsset(asset);
+  const input = row.querySelector(".asset-label-input");
+  const label = input ? input.value.trim() : "";
+  if (!endpoint || !label) {
+    showToast("Enter a label");
+    return;
+  }
+  try {
+    await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    });
+    await refreshEditorAssets();
+    await refreshExtractions();
+    await refreshMusicGenerations();
+    showToast("Label saved");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function refreshEditorAssets() {
+  state.editorAssets = await api("/api/editor/assets");
+  renderEditorAssets();
+}
+
+async function saveEditedAudio() {
+  const file = el.editSaveFile.files && el.editSaveFile.files[0];
+  const label = el.editSaveLabelInput.value.trim();
+  if (!label) {
+    showToast("Enter an edit name");
+    return;
+  }
+  if (!file) {
+    showToast("Choose the exported audio file");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("label", label);
+  if (state.selectedEditorAsset) {
+    formData.append("source_asset_id", state.selectedEditorAsset.asset_id);
+    formData.append("source_category", state.selectedEditorAsset.category);
+  }
+
+  setPill(el.editSaveState, "Saving", "warn");
+  el.saveEditButton.disabled = true;
+  try {
+    const response = await fetch("/api/edits", {
+      method: "POST",
+      body: formData,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(body && body.detail ? body.detail : `Save failed: ${response.status}`);
+    }
+    setPill(el.editSaveState, "Saved", "ok");
+    el.editSaveFile.value = "";
+    el.editSaveFileName.textContent = "No file selected";
+    await refreshEditorAssets();
+    showToast("Edit saved");
+  } catch (error) {
+    setPill(el.editSaveState, "Error", "error");
+    showToast(error.message);
+  } finally {
+    el.saveEditButton.disabled = false;
+    refreshLogs();
+  }
 }
 
 function applyMusicModelDefaults() {
@@ -573,6 +739,7 @@ async function mergeSelectedExtractions() {
     state.extractionResults.unshift(response.extraction);
     state.extractionResults = state.extractionResults.slice(0, 24);
     renderExtractionList();
+    await refreshEditorAssets();
     el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Merge finished.";
     showToast("Merge complete");
   } catch (error) {
@@ -601,7 +768,7 @@ function addGeneratedResult(result, plan) {
 }
 
 async function loadAll() {
-  const [status, runtime, presets, models, tracks, extractions, musicGenerations, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, editorAssets, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
@@ -609,6 +776,7 @@ async function loadAll() {
     api("/api/extractions/tracks"),
     api("/api/extractions"),
     api("/api/music-generations"),
+    api("/api/editor/assets"),
     api("/api/logs"),
   ]);
   state.presets = presets;
@@ -616,6 +784,7 @@ async function loadAll() {
   state.extractionTracks = tracks;
   state.extractionResults = extractions;
   state.musicResults = musicGenerations;
+  state.editorAssets = editorAssets;
   renderStatus(status);
   renderRuntime(runtime);
   renderPresets();
@@ -624,6 +793,7 @@ async function loadAll() {
   renderExtractionList();
   applyMusicModelDefaults();
   renderMusicList();
+  renderEditorAssets();
   renderLogs(logs);
 }
 
@@ -843,6 +1013,7 @@ async function runExtraction() {
     state.extractionResults.unshift(response.extraction);
     state.extractionResults = state.extractionResults.slice(0, 24);
     renderExtractionList();
+    await refreshEditorAssets();
     if (response.extraction.status === "complete") {
       setPill(el.extractActionState, "Complete", "ok");
       el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Track extraction finished.";
@@ -893,6 +1064,7 @@ async function runMusicGeneration() {
     state.musicResults.unshift(response.generation);
     state.musicResults = state.musicResults.slice(0, 24);
     renderMusicList();
+    await refreshEditorAssets();
     if (response.generation.status === "complete") {
       setPill(el.musicActionState, "Complete", "ok");
       el.musicActivity.innerHTML = "<strong>Complete</strong><br>Music generation finished.";
@@ -939,6 +1111,7 @@ async function generateTransition() {
       body: JSON.stringify(payload),
     });
     addGeneratedResult(response.result, response.plan);
+    await refreshEditorAssets();
     if (response.result.status === "complete") {
       setPill(el.actionState, "Complete", "ok");
       el.generationActivity.innerHTML = "<strong>Complete</strong><br>Transition generated.";
@@ -994,6 +1167,7 @@ async function refreshStatus() {
   renderRuntime(await api("/api/runtime/status"));
   await refreshActivity();
   await refreshModels();
+  await refreshEditorAssets();
   await refreshLogs();
   showToast("Status refreshed");
 }
@@ -1004,6 +1178,17 @@ el.musicTabButton.addEventListener("click", () => setActivePage("music"));
 el.audioEditTabButton.addEventListener("click", () => setActivePage("audioedit"));
 el.reloadAudioEditorButton.addEventListener("click", reloadAudioEditor);
 el.openAudioEditorButton.addEventListener("click", openAudioEditorWindow);
+el.refreshEditorAssetsButton.addEventListener("click", async () => {
+  await refreshEditorAssets();
+  showToast("Editor assets refreshed");
+});
+el.editorAssetSearch.addEventListener("input", renderEditorAssets);
+el.editorCategoryFilter.addEventListener("change", renderEditorAssets);
+el.editSaveFile.addEventListener("change", () => {
+  const file = el.editSaveFile.files && el.editSaveFile.files[0];
+  el.editSaveFileName.textContent = file ? file.name : "No file selected";
+});
+el.saveEditButton.addEventListener("click", saveEditedAudio);
 el.generateButton.addEventListener("click", generateTransition);
 el.loadSourceButton.addEventListener("click", loadSource);
 el.sourceFile.addEventListener("change", uploadSourceFile);
@@ -1015,10 +1200,12 @@ el.runMusicButton.addEventListener("click", runMusicGeneration);
 el.musicModelSelect.addEventListener("change", applyMusicModelDefaults);
 el.refreshMusicButton.addEventListener("click", async () => {
   await refreshMusicGenerations();
+  await refreshEditorAssets();
   showToast("Music generations refreshed");
 });
 el.refreshExtractionsButton.addEventListener("click", async () => {
   await refreshExtractions();
+  await refreshEditorAssets();
   showToast("Extractions refreshed");
 });
 el.installModelButton.addEventListener("click", installModel);

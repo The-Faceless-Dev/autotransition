@@ -58,6 +58,8 @@ def test_ui_index_includes_audio_editor_tab(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Dance Station" in response.text
     assert "Audio Editor" in response.text
+    assert "Dance Station Assets" in response.text
+    assert "Save Edited Result" in response.text
     assert 'src="/audiomass/"' in response.text
 
 
@@ -349,6 +351,35 @@ def write_extraction_metadata(
     return path
 
 
+def write_result_metadata(
+    root: Path,
+    item_id: str,
+    filename: str,
+    audio_path: Path,
+    *,
+    category: str,
+    label: str,
+    id_key: str,
+) -> Path:
+    import json
+    import datetime as _datetime
+
+    metadata = {
+        id_key: item_id,
+        "type": category,
+        "status": "complete",
+        "message": "Complete.",
+        "created_at": _datetime.datetime.now(_datetime.UTC).isoformat(),
+        "label": label,
+        "generated_audio_path": str(audio_path),
+        "metadata_path": str(root / item_id / filename),
+    }
+    path = root / item_id / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return path
+
+
 def test_ui_extraction_rename_updates_metadata(tmp_path: Path, monkeypatch) -> None:
     import json
 
@@ -362,6 +393,138 @@ def test_ui_extraction_rename_updates_metadata(tmp_path: Path, monkeypatch) -> N
     assert response.status_code == 200
     assert response.json()["extraction"]["label"] == "Lead vocal"
     assert json.loads(metadata_path.read_text(encoding="utf-8"))["label"] == "Lead vocal"
+
+
+def test_ui_editor_assets_lists_dance_station_outputs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    transition_audio = make_wav(tmp_path / "transition.wav", duration_ms=400)
+    music_audio = make_wav(tmp_path / "music.wav", duration_ms=400)
+    extraction_audio = make_wav(tmp_path / "vocals.wav", duration_ms=400)
+    merge_audio = make_wav(tmp_path / "merge.wav", duration_ms=400)
+    edit_audio = make_wav(tmp_path / "edit.wav", duration_ms=400)
+    write_result_metadata(
+        tmp_path / "data" / "generated",
+        "generation-a",
+        "result.json",
+        transition_audio,
+        category="transition",
+        label="Bridge transition",
+        id_key="generation_id",
+    )
+    write_result_metadata(
+        tmp_path / "data" / "generations",
+        "music-a",
+        "generation.json",
+        music_audio,
+        category="generation",
+        label="Horror cue",
+        id_key="generation_id",
+    )
+    write_extraction_metadata(tmp_path / "data" / "extractions", "extraction-a", extraction_audio, label="Vocals")
+    write_extraction_metadata(
+        tmp_path / "data" / "extractions",
+        "merge-a",
+        merge_audio,
+        item_type="merge",
+        label="Stem blend",
+    )
+    write_result_metadata(
+        tmp_path / "data" / "edits",
+        "edit-a",
+        "edit.json",
+        edit_audio,
+        category="edit",
+        label="Clean edit",
+        id_key="edit_id",
+    )
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    response = client.get("/api/editor/assets")
+
+    assert response.status_code == 200
+    assets = response.json()
+    labels = {item["label"]: item["category"] for item in assets}
+    assert labels["Bridge transition"] == "transition"
+    assert labels["Horror cue"] == "generation"
+    assert labels["Vocals"] == "extraction"
+    assert labels["Stem blend"] == "merge"
+    assert labels["Clean edit"] == "edit"
+    assert all(item["audio_url"].startswith("/api/editor/audio?path=") for item in assets)
+
+
+def test_ui_editor_save_edit_records_history_and_asset(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = make_wav(tmp_path / "edited.wav", duration_ms=500)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    with source.open("rb") as audio_file:
+        response = client.post(
+            "/api/edits",
+            data={
+                "label": "Clean transition",
+                "source_asset_id": "generation-a",
+                "source_category": "transition",
+            },
+            files={"file": ("edited.wav", audio_file, "audio/wav")},
+        )
+    history = client.get("/api/edits")
+    assets = client.get("/api/editor/assets")
+
+    assert response.status_code == 200
+    edit = response.json()["edit"]
+    assert edit["label"] == "Clean transition"
+    assert edit["source_asset_id"] == "generation-a"
+    assert Path(edit["generated_audio_path"]).exists()
+    assert history.json()[0]["edit_id"] == edit["edit_id"]
+    assert any(item["category"] == "edit" and item["label"] == "Clean transition" for item in assets.json())
+
+
+def test_ui_editor_rename_endpoints_update_metadata(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    transition_audio = make_wav(tmp_path / "transition.wav", duration_ms=400)
+    music_audio = make_wav(tmp_path / "music.wav", duration_ms=400)
+    edit_audio = make_wav(tmp_path / "edit.wav", duration_ms=400)
+    transition_metadata = write_result_metadata(
+        tmp_path / "data" / "generated",
+        "generation-a",
+        "result.json",
+        transition_audio,
+        category="transition",
+        label="Old transition",
+        id_key="generation_id",
+    )
+    music_metadata = write_result_metadata(
+        tmp_path / "data" / "generations",
+        "music-a",
+        "generation.json",
+        music_audio,
+        category="generation",
+        label="Old music",
+        id_key="generation_id",
+    )
+    edit_metadata = write_result_metadata(
+        tmp_path / "data" / "edits",
+        "edit-a",
+        "edit.json",
+        edit_audio,
+        category="edit",
+        label="Old edit",
+        id_key="edit_id",
+    )
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    transition = client.post("/api/transitions/generation-a/rename", json={"label": "New transition"})
+    music = client.post("/api/music-generations/music-a/rename", json={"label": "New music"})
+    edit = client.post("/api/edits/edit-a/rename", json={"label": "New edit"})
+
+    assert transition.status_code == 200
+    assert music.status_code == 200
+    assert edit.status_code == 200
+    assert json.loads(transition_metadata.read_text(encoding="utf-8"))["label"] == "New transition"
+    assert json.loads(music_metadata.read_text(encoding="utf-8"))["label"] == "New music"
+    assert json.loads(edit_metadata.read_text(encoding="utf-8"))["label"] == "New edit"
 
 
 def test_ui_merge_extractions_writes_playable_history(tmp_path: Path, monkeypatch) -> None:
@@ -732,6 +895,7 @@ def test_ui_generate_from_selection_reports_missing_runtime_when_model_ready(tmp
 
 
 def test_ui_generate_from_selection_uses_text2music_and_composite_by_default(tmp_path: Path, monkeypatch) -> None:
+    import json
     import autotransition.ui.app as ui_app
     from autotransition.models.base import RepaintResult
 
@@ -790,6 +954,9 @@ def test_ui_generate_from_selection_uses_text2music_and_composite_by_default(tmp
     ]
     assert Path(payload["result"]["generated_audio_path"]).exists()
     assert payload["result"]["generated_audio_path"].endswith("final.wav")
+    result_metadata = Path(payload["result"]["metadata_path"])
+    assert result_metadata.exists()
+    assert json.loads(result_metadata.read_text(encoding="utf-8"))["type"] == "transition"
 
 
 def test_ui_generate_from_selection_can_boundary_repaint_composite(tmp_path: Path, monkeypatch) -> None:

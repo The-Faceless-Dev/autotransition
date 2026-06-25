@@ -62,6 +62,24 @@
 	<script src="multitrack.js"></script>
 	<script>
 		var editor = PKAudioEditor.init ('app');
+		(function () {
+			var attempts = 0;
+			function loadDanceStationAudio () {
+				var params = new URLSearchParams (window.location.search);
+				var audioUrl = params.get ('ds_audio');
+				if (!audioUrl) return;
+				if (!editor || !editor.engine || !editor.engine.LoadSample) {
+					if (++attempts < 20) setTimeout (loadDanceStationAudio, 250);
+					return;
+				}
+				try {
+					editor.engine.LoadSample (audioUrl);
+				} catch (error) {
+					console.error ('Could not load Dance Station audio asset', error);
+				}
+			}
+			setTimeout (loadDanceStationAudio, 700);
+		})();
 		if ('serviceWorker' in navigator) {
 			try {
 			//	navigator.serviceWorker.register( 'sw.js' );
