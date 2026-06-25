@@ -51,5 +51,6 @@ def test_require_pydub_error_includes_package_install_command(monkeypatch) -> No
         assert "pydub is required to merge audio" in message
         assert 'python -m pip install -e ".[dev]"' in message
         assert "same environment used for `autotransition run`" in message
+        assert "missing pydub" in message
     else:
         raise AssertionError("Expected missing pydub to raise an actionable error")

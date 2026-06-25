@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import importlib.util
 from pathlib import Path
 
 import typer
 
 from autotransition.audio import build_repaint_scaffold
-from autotransition.audio.ffmpeg import resolve_ffmpeg
+from autotransition.audio.ffmpeg import require_pydub, resolve_ffmpeg
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.models import (
     ACE_STEP_MODELS,
@@ -57,12 +56,12 @@ def doctor_all(
 ) -> None:
     """Check Autotransition dependencies and ACE-Step runtime setup."""
 
-    pydub_available = importlib.util.find_spec("pydub") is not None
-    typer.echo(
-        "ok: pydub - pydub is installed."
-        if pydub_available
-        else 'error: pydub - Missing. Run: python -m pip install -e ".[dev]"'
-    )
+    try:
+        require_pydub("process audio")
+    except RuntimeError as exc:
+        typer.echo(f"error: pydub - {exc}")
+    else:
+        typer.echo("ok: pydub - pydub AudioSegment import works.")
 
     ffmpeg = resolve_ffmpeg()
     typer.echo(

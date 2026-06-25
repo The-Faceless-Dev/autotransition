@@ -43,10 +43,11 @@ def require_pydub(purpose: str) -> Any:
     try:
         from pydub import AudioSegment
     except ImportError as exc:
+        detail = f" Import failed with: {exc}" if str(exc) else ""
         raise RuntimeError(
             f"pydub is required to {purpose}. "
             'Run `python -m pip install -e ".[dev]"` in the same environment used for `autotransition run`, '
-            "then restart the app."
+            f"then restart the app.{detail}"
         ) from exc
     configure_pydub_ffmpeg()
     return AudioSegment
