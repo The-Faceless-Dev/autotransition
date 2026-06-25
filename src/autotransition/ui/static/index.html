@@ -23,6 +23,7 @@
       <button id="transitionTabButton" class="tab-button active" type="button">Autotransition</button>
       <button id="extractionTabButton" class="tab-button" type="button">Track Extraction</button>
       <button id="musicTabButton" class="tab-button" type="button">Music Generation</button>
+      <button id="audioEditTabButton" class="tab-button" type="button">Audio Editor</button>
     </nav>
 
     <main id="transitionPage" class="workspace app-page active">
@@ -451,6 +452,28 @@
           <ol id="extractLogList" class="log-list"></ol>
         </section>
       </aside>
+    </main>
+
+    <main id="audioEditPage" class="workspace app-page editor-page">
+      <section class="panel editor-shell">
+        <div class="panel-heading editor-heading">
+          <div>
+            <h2>Audio Editor</h2>
+            <div class="editor-subtitle">AudioMass</div>
+          </div>
+          <div class="button-row">
+            <button id="reloadAudioEditorButton" class="secondary-button" type="button">Reload</button>
+            <button id="openAudioEditorButton" class="secondary-button" type="button">Open Window</button>
+          </div>
+        </div>
+        <iframe
+          id="audioEditorFrame"
+          class="audio-editor-frame"
+          title="AudioMass audio editor"
+          src="/audiomass/"
+          allow="autoplay; clipboard-read; clipboard-write; microphone"
+        ></iframe>
+      </section>
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

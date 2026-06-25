@@ -50,6 +50,32 @@ def test_ui_models_endpoint_includes_install_status(tmp_path: Path) -> None:
     assert all("status" in model for model in models)
 
 
+def test_ui_index_includes_audio_editor_tab(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Dance Station" in response.text
+    assert "Audio Editor" in response.text
+    assert 'src="/audiomass/"' in response.text
+
+
+def test_audiomass_static_editor_is_served(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    index_response = client.get("/audiomass/")
+    script_response = client.get("/audiomass/ui.js")
+    license_response = client.get("/audiomass/LICENSE")
+
+    assert index_response.status_code == 200
+    assert "AudioMass - Audio Editor" in index_response.text
+    assert script_response.status_code == 200
+    assert "PKAudioEditor" in script_response.text
+    assert license_response.status_code == 200
+    assert "MIT License" in license_response.text
+
+
 def test_ui_models_endpoint_exposes_working_xl_base_generation_defaults(tmp_path: Path) -> None:
     client = TestClient(create_app(models_dir=tmp_path))
 

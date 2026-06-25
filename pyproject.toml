@@ -34,7 +34,15 @@ autotransition = "autotransition.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-autotransition = ["ui/static/*"]
+autotransition = [
+  "ui/static/*",
+  "vendor/audiomass/*",
+  "vendor/audiomass/about/*",
+  "vendor/audiomass/dist/*",
+  "vendor/audiomass/dist/plugin/*",
+  "vendor/audiomass/fonts/*",
+  "vendor/audiomass/mp3/multi/*"
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -233,6 +233,10 @@ h3 {
   display: grid;
 }
 
+.workspace.editor-page.active {
+  grid-template-columns: 1fr;
+}
+
 .panel {
   min-width: 0;
   border: 1px solid var(--line);
@@ -248,6 +252,34 @@ h3 {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.editor-shell {
+  grid-column: 1 / -1;
+  min-height: calc(100vh - 154px);
+  padding: 12px;
+}
+
+.editor-heading {
+  margin-bottom: 10px;
+}
+
+.editor-subtitle {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.audio-editor-frame {
+  display: block;
+  width: 100%;
+  height: calc(100vh - 232px);
+  min-height: 640px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #050607;
 }
 
 .field {

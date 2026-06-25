@@ -19,9 +19,11 @@ const el = {
   transitionTabButton: document.querySelector("#transitionTabButton"),
   extractionTabButton: document.querySelector("#extractionTabButton"),
   musicTabButton: document.querySelector("#musicTabButton"),
+  audioEditTabButton: document.querySelector("#audioEditTabButton"),
   transitionPage: document.querySelector("#transitionPage"),
   extractionPage: document.querySelector("#extractionPage"),
   musicPage: document.querySelector("#musicPage"),
+  audioEditPage: document.querySelector("#audioEditPage"),
   ffmpegBadge: document.querySelector("#ffmpegBadge"),
   modelCountBadge: document.querySelector("#modelCountBadge"),
   runtimeBadge: document.querySelector("#runtimeBadge"),
@@ -118,6 +120,9 @@ const el = {
   musicActivity: document.querySelector("#musicActivity"),
   musicList: document.querySelector("#musicList"),
   musicLogList: document.querySelector("#musicLogList"),
+  audioEditorFrame: document.querySelector("#audioEditorFrame"),
+  reloadAudioEditorButton: document.querySelector("#reloadAudioEditorButton"),
+  openAudioEditorButton: document.querySelector("#openAudioEditorButton"),
   toast: document.querySelector("#toast"),
 };
 
@@ -295,9 +300,19 @@ function setActivePage(page) {
   el.transitionPage.classList.toggle("active", page === "transition");
   el.extractionPage.classList.toggle("active", page === "extraction");
   el.musicPage.classList.toggle("active", page === "music");
+  el.audioEditPage.classList.toggle("active", page === "audioedit");
   el.transitionTabButton.classList.toggle("active", page === "transition");
   el.extractionTabButton.classList.toggle("active", page === "extraction");
   el.musicTabButton.classList.toggle("active", page === "music");
+  el.audioEditTabButton.classList.toggle("active", page === "audioedit");
+}
+
+function reloadAudioEditor() {
+  el.audioEditorFrame.src = "/audiomass/";
+}
+
+function openAudioEditorWindow() {
+  window.open("/audiomass/", "_blank", "noopener");
 }
 
 function applyMusicModelDefaults() {
@@ -986,6 +1001,9 @@ async function refreshStatus() {
 el.transitionTabButton.addEventListener("click", () => setActivePage("transition"));
 el.extractionTabButton.addEventListener("click", () => setActivePage("extraction"));
 el.musicTabButton.addEventListener("click", () => setActivePage("music"));
+el.audioEditTabButton.addEventListener("click", () => setActivePage("audioedit"));
+el.reloadAudioEditorButton.addEventListener("click", reloadAudioEditor);
+el.openAudioEditorButton.addEventListener("click", openAudioEditorWindow);
 el.generateButton.addEventListener("click", generateTransition);
 el.loadSourceButton.addEventListener("click", loadSource);
 el.sourceFile.addEventListener("change", uploadSourceFile);

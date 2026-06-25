@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -225,14 +225,20 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     runtime_config = runtime_config or RuntimeConfig()
     app = FastAPI(title="Dance Station", version="0.1.0")
     static_dir = Path(__file__).parent / "static"
+    audiomass_dir = Path(__file__).resolve().parents[1] / "vendor" / "audiomass"
     ui_log = UiLog()
     ui_log.add("info", "UI server started.")
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/audiomass", StaticFiles(directory=audiomass_dir, html=True), name="audiomass")
 
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/audiomass")
+    def audiomass_index() -> RedirectResponse:
+        return RedirectResponse("/audiomass/")
 
     @app.get("/api/status")
     def get_status() -> dict[str, object]:

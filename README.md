@@ -2,11 +2,12 @@
 
 Dance Station is an AI music workstation distributed by **The Faceless Dancer**. It is built for creators, streamers, visualizers, rhythm-game experiments, and other media projects that need practical tools for generating, extending, separating, and organizing music clips.
 
-The app currently includes three main work areas:
+The app currently includes four main work areas:
 
 - **Autotransition**: continue a source song from a selected point and create a natural transition into newly generated music.
 - **Extraction**: separate useful musical parts from a song using ACE-Step extraction.
 - **Generation**: create new music directly from a prompt.
+- **Audio Editor**: edit, repair, record, export, and arrange audio with an integrated AudioMass editor.
 
 The current command-line package is still named `autotransition`, so setup and run commands use that executable.
 
@@ -77,6 +78,20 @@ It exposes the generation controls that are useful for the active ACE-Step model
 
 Completed generations are listed in the UI with playable audio and saved metadata.
 
+## Audio Editor
+
+The Audio Editor section embeds a local vendored copy of AudioMass inside Dance Station.
+
+AudioMass provides browser-side waveform editing, selections, trim/cut/copy/paste workflows, effects, repair tools, recording, export, and multitrack editing with clips, fades, crossfades, mixer controls, session save/open, and mixdown.
+
+Dance Station serves the editor from the same local app at:
+
+```text
+http://127.0.0.1:7860/audiomass/
+```
+
+The integrated copy preserves the upstream AudioMass MIT license and third-party notices under `src/autotransition/vendor/audiomass/`.
+
 ## ACE-Step Runtime
 
 Normal users should use:
@@ -102,6 +117,7 @@ src/autotransition/
   pipeline/     Transition planning and scaffold state.
   scoring/      Candidate scoring interfaces.
   ui/           Local web UI and API.
+  vendor/       Vendored browser tools such as AudioMass.
   cli.py        Command-line entry point.
   config.py     Central configuration defaults.
 ```
