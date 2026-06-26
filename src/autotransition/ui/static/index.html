@@ -39,6 +39,16 @@
           <span id="selectedFileName">No file selected</span>
         </div>
 
+        <div class="existing-source-picker">
+          <label class="field">
+            <span>Existing creation</span>
+            <select id="sourceAssetSelect">
+              <option value="">Choose an existing creation</option>
+            </select>
+          </label>
+          <button id="loadSourceAssetButton" class="secondary-button" type="button">Load Creation</button>
+        </div>
+
         <label class="field">
           <span>Audio path</span>
           <input id="sourcePath" type="text" placeholder="D:\music\song.mp3 or clip.wav" />
@@ -334,6 +344,16 @@
           <span id="extractSelectedFileName">No file selected</span>
         </div>
 
+        <div class="existing-source-picker">
+          <label class="field">
+            <span>Existing creation</span>
+            <select id="extractSourceAssetSelect">
+              <option value="">Choose an existing creation</option>
+            </select>
+          </label>
+          <button id="loadExtractSourceAssetButton" class="secondary-button" type="button">Load Creation</button>
+        </div>
+
         <label class="field">
           <span>Audio path</span>
           <input id="extractSourcePath" type="text" placeholder="D:\music\song.mp3 or clip.wav" />
@@ -516,7 +536,7 @@
           <input id="editSaveLabelInput" type="text" placeholder="Edited transition, cleaned vocal, final mix" />
         </label>
         <div class="file-picker">
-          <label class="file-button" for="editSaveFile">Choose Exported Audio</label>
+          <label class="file-button" for="editSaveFile">Fallback File</label>
           <input id="editSaveFile" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,audio/*" />
           <span id="editSaveFileName">No file selected</span>
         </div>

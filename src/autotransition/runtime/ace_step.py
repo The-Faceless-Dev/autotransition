@@ -204,6 +204,12 @@ def build_runtime_env() -> dict[str, str]:
     env.setdefault("TMP", str(Path("data/runtime/tmp").resolve()))
     env.setdefault("ACESTEP_CONFIG_PATH", "acestep-v15-turbo")
     env.setdefault("ACESTEP_CONFIG_PATH2", "acestep-v15-base")
+    if env.get("DANCE_STATION_RUNTIME_OFFLOAD", "1").lower() not in ("0", "false", "no"):
+        env.setdefault("ACESTEP_OFFLOAD_TO_CPU", "1")
+    if env.get("DANCE_STATION_RUNTIME_DIT_OFFLOAD", "1").lower() not in ("0", "false", "no"):
+        env.setdefault("ACESTEP_OFFLOAD_DIT_TO_CPU", "1")
+    if env.get("DANCE_STATION_RUNTIME_LM_OFFLOAD", "1").lower() not in ("0", "false", "no"):
+        env.setdefault("ACESTEP_LM_OFFLOAD_TO_CPU", "1")
     return env
 
 

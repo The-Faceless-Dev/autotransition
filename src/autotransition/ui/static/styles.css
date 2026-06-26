@@ -148,6 +148,18 @@ h3 {
   font-size: 14px;
 }
 
+.existing-source-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.existing-source-picker .field {
+  margin-bottom: 0;
+}
+
 #selectedFileName {
   min-width: 0;
   color: var(--muted);

@@ -207,6 +207,9 @@ def test_runtime_env_disables_hf_transfer_by_default(monkeypatch) -> None:
     monkeypatch.setenv("HF_HUB_ENABLE_HF_TRANSFER", "1")
     monkeypatch.delenv("AUTOTRANSITION_ALLOW_HF_TRANSFER", raising=False)
     monkeypatch.delenv("UV_LINK_MODE", raising=False)
+    monkeypatch.delenv("ACESTEP_OFFLOAD_TO_CPU", raising=False)
+    monkeypatch.delenv("ACESTEP_OFFLOAD_DIT_TO_CPU", raising=False)
+    monkeypatch.delenv("ACESTEP_LM_OFFLOAD_TO_CPU", raising=False)
 
     env = build_runtime_env()
 
@@ -216,6 +219,9 @@ def test_runtime_env_disables_hf_transfer_by_default(monkeypatch) -> None:
     assert env["TMPDIR"].replace("\\", "/").endswith("data/runtime/tmp")
     assert env["ACESTEP_CONFIG_PATH"] == "acestep-v15-turbo"
     assert env["ACESTEP_CONFIG_PATH2"] == "acestep-v15-base"
+    assert env["ACESTEP_OFFLOAD_TO_CPU"] == "1"
+    assert env["ACESTEP_OFFLOAD_DIT_TO_CPU"] == "1"
+    assert env["ACESTEP_LM_OFFLOAD_TO_CPU"] == "1"
 
 
 def test_runtime_env_allows_explicit_hf_transfer(monkeypatch) -> None:
@@ -227,6 +233,21 @@ def test_runtime_env_allows_explicit_hf_transfer(monkeypatch) -> None:
 
     assert env["HF_HUB_ENABLE_HF_TRANSFER"] == "1"
     assert env["UV_LINK_MODE"] == "clone"
+
+
+def test_runtime_env_allows_offload_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("DANCE_STATION_RUNTIME_OFFLOAD", "0")
+    monkeypatch.setenv("DANCE_STATION_RUNTIME_DIT_OFFLOAD", "0")
+    monkeypatch.setenv("DANCE_STATION_RUNTIME_LM_OFFLOAD", "0")
+    monkeypatch.delenv("ACESTEP_OFFLOAD_TO_CPU", raising=False)
+    monkeypatch.delenv("ACESTEP_OFFLOAD_DIT_TO_CPU", raising=False)
+    monkeypatch.delenv("ACESTEP_LM_OFFLOAD_TO_CPU", raising=False)
+
+    env = build_runtime_env()
+
+    assert "ACESTEP_OFFLOAD_TO_CPU" not in env
+    assert "ACESTEP_OFFLOAD_DIT_TO_CPU" not in env
+    assert "ACESTEP_LM_OFFLOAD_TO_CPU" not in env
 
 
 def test_run_install_retries_uv_sync_after_partial_venv_failure(tmp_path: Path, monkeypatch) -> None:

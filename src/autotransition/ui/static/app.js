@@ -39,6 +39,8 @@ const el = {
   sourcePath: document.querySelector("#sourcePath"),
   sourceFile: document.querySelector("#sourceFile"),
   selectedFileName: document.querySelector("#selectedFileName"),
+  sourceAssetSelect: document.querySelector("#sourceAssetSelect"),
+  loadSourceAssetButton: document.querySelector("#loadSourceAssetButton"),
   loadSourceButton: document.querySelector("#loadSourceButton"),
   sourceDuration: document.querySelector("#sourceDuration"),
   sourceFormatReadout: document.querySelector("#sourceFormatReadout"),
@@ -78,6 +80,8 @@ const el = {
   extractSourceState: document.querySelector("#extractSourceState"),
   extractSourceFile: document.querySelector("#extractSourceFile"),
   extractSelectedFileName: document.querySelector("#extractSelectedFileName"),
+  extractSourceAssetSelect: document.querySelector("#extractSourceAssetSelect"),
+  loadExtractSourceAssetButton: document.querySelector("#loadExtractSourceAssetButton"),
   extractSourcePath: document.querySelector("#extractSourcePath"),
   loadExtractSourceButton: document.querySelector("#loadExtractSourceButton"),
   extractSourceDuration: document.querySelector("#extractSourceDuration"),
@@ -383,6 +387,57 @@ function renderEditorAssets() {
   });
 }
 
+function renderSourceAssetOptions() {
+  const selects = [el.sourceAssetSelect, el.extractSourceAssetSelect].filter(Boolean);
+  selects.forEach((select) => {
+    const current = select.value;
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Choose an existing creation";
+    select.appendChild(placeholder);
+
+    state.editorAssets.forEach((asset) => {
+      const option = document.createElement("option");
+      option.value = asset.asset_id;
+      option.textContent = `${asset.category}: ${asset.label}`;
+      option.dataset.audioPath = asset.audio_path || "";
+      select.appendChild(option);
+    });
+
+    if ([...select.options].some((option) => option.value === current)) {
+      select.value = current;
+    }
+  });
+}
+
+function selectedSourceAsset(select) {
+  const assetId = select.value;
+  return state.editorAssets.find((asset) => asset.asset_id === assetId) || null;
+}
+
+async function loadExistingCreationAsTransitionSource() {
+  const asset = selectedSourceAsset(el.sourceAssetSelect);
+  if (!asset || !asset.audio_path) {
+    showToast("Choose an existing creation");
+    return;
+  }
+  el.sourcePath.value = asset.audio_path;
+  el.selectedFileName.textContent = `${asset.category}: ${asset.label}`;
+  await loadSource();
+}
+
+async function loadExistingCreationAsExtractionSource() {
+  const asset = selectedSourceAsset(el.extractSourceAssetSelect);
+  if (!asset || !asset.audio_path) {
+    showToast("Choose an existing creation");
+    return;
+  }
+  el.extractSourcePath.value = asset.audio_path;
+  el.extractSelectedFileName.textContent = `${asset.category}: ${asset.label}`;
+  await loadExtractionSource();
+}
+
 function openAssetInEditor(asset) {
   state.selectedEditorAsset = asset;
   const url = assetAudioUrl(asset);
@@ -433,21 +488,59 @@ async function renameEditorAsset(asset, row) {
 
 async function refreshEditorAssets() {
   state.editorAssets = await api("/api/editor/assets");
+  renderSourceAssetOptions();
   renderEditorAssets();
 }
 
-async function saveEditedAudio() {
-  const file = el.editSaveFile.files && el.editSaveFile.files[0];
-  const label = el.editSaveLabelInput.value.trim();
-  if (!label) {
-    showToast("Enter an edit name");
-    return;
-  }
-  if (!file) {
-    showToast("Choose the exported audio file");
-    return;
-  }
+function safeEditFileName(label) {
+  const stem = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${stem || "dance-station-edit"}.wav`;
+}
 
+function requestEditorAudio(label) {
+  const frameWindow = el.audioEditorFrame && el.audioEditorFrame.contentWindow;
+  if (!frameWindow) {
+    return Promise.reject(new Error("Audio editor is not ready"));
+  }
+  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("Audio editor did not return audio"));
+    }, 15000);
+
+    function onMessage(event) {
+      if (event.source !== frameWindow) return;
+      const message = event.data || {};
+      if (message.type !== "dance-station-export-audio-result" || message.requestId !== requestId) return;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      if (!message.ok) {
+        reject(new Error(message.error || "Audio editor export failed"));
+        return;
+      }
+      const blob = new Blob([message.audio], { type: message.mimeType || "audio/wav" });
+      resolve(new File([blob], safeEditFileName(label), { type: "audio/wav" }));
+    }
+
+    window.addEventListener("message", onMessage);
+    frameWindow.postMessage(
+      {
+        type: "dance-station-export-audio",
+        requestId,
+        name: safeEditFileName(label),
+      },
+      window.location.origin,
+    );
+  });
+}
+
+async function uploadEditedAudioFile(file, label) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("label", label);
@@ -478,6 +571,29 @@ async function saveEditedAudio() {
   } finally {
     el.saveEditButton.disabled = false;
     refreshLogs();
+  }
+}
+
+async function saveEditedAudio() {
+  const fallbackFile = el.editSaveFile.files && el.editSaveFile.files[0];
+  const label = el.editSaveLabelInput.value.trim();
+  if (!label) {
+    showToast("Enter an edit name");
+    return;
+  }
+
+  setPill(el.editSaveState, "Exporting", "warn");
+  el.saveEditButton.disabled = true;
+  try {
+    const file = await requestEditorAudio(label).catch((error) => {
+      if (fallbackFile) return fallbackFile;
+      throw error;
+    });
+    await uploadEditedAudioFile(file, label);
+  } catch (error) {
+    setPill(el.editSaveState, "Error", "error");
+    showToast(error.message);
+    el.saveEditButton.disabled = false;
   }
 }
 
@@ -793,6 +909,7 @@ async function loadAll() {
   renderExtractionList();
   applyMusicModelDefaults();
   renderMusicList();
+  renderSourceAssetOptions();
   renderEditorAssets();
   renderLogs(logs);
 }
@@ -1190,8 +1307,10 @@ el.editSaveFile.addEventListener("change", () => {
 });
 el.saveEditButton.addEventListener("click", saveEditedAudio);
 el.generateButton.addEventListener("click", generateTransition);
+el.loadSourceAssetButton.addEventListener("click", loadExistingCreationAsTransitionSource);
 el.loadSourceButton.addEventListener("click", loadSource);
 el.sourceFile.addEventListener("change", uploadSourceFile);
+el.loadExtractSourceAssetButton.addEventListener("click", loadExistingCreationAsExtractionSource);
 el.loadExtractSourceButton.addEventListener("click", loadExtractionSource);
 el.extractSourceFile.addEventListener("change", uploadExtractionSourceFile);
 el.runExtractionButton.addEventListener("click", runExtraction);
