@@ -23,6 +23,7 @@
       <button id="transitionTabButton" class="tab-button active" type="button">Autotransition</button>
       <button id="extractionTabButton" class="tab-button" type="button">Track Extraction</button>
       <button id="musicTabButton" class="tab-button" type="button">Music Generation</button>
+      <button id="lokrTrainingTabButton" class="tab-button" type="button">LoKr Training</button>
       <button id="instrumentLabTabButton" class="tab-button" type="button">Instrument Lab</button>
       <button id="audioEditTabButton" class="tab-button" type="button">Audio Editor</button>
     </nav>
@@ -498,6 +499,186 @@
             <span class="mini-state">Local</span>
           </div>
           <ol id="extractLogList" class="log-list"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <main id="lokrTrainingPage" class="workspace app-page lokr-page">
+      <section class="panel lokr-datasets-panel">
+        <div class="panel-heading">
+          <h2>Datasets</h2>
+          <span id="lokrDatasetState" class="mini-state">Ready</span>
+        </div>
+        <label class="field">
+          <span>New dataset label</span>
+          <input id="lokrNewDatasetLabel" type="text" value="New LoKr dataset" />
+        </label>
+        <div class="button-row">
+          <button id="createLokrDatasetButton" class="primary-button" type="button">Create Dataset</button>
+          <button id="refreshLokrDatasetsButton" class="secondary-button" type="button">Refresh</button>
+        </div>
+        <div id="lokrDatasetList" class="generated-list">
+          <div class="empty-result">No LoKr datasets yet.</div>
+        </div>
+      </section>
+
+      <section class="panel lokr-editor-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Dataset Builder</h2>
+            <div id="lokrActiveDatasetReadout" class="editor-subtitle">No dataset selected</div>
+          </div>
+          <button id="saveLokrDatasetButton" class="primary-button" type="button">Save Dataset</button>
+        </div>
+
+        <div class="control-grid">
+          <label class="field">
+            <span>Label</span>
+            <input id="lokrDatasetLabel" type="text" placeholder="dataset name" />
+          </label>
+          <label class="field">
+            <span>Trigger tag</span>
+            <input id="lokrCustomTag" type="text" placeholder="optional trigger word" />
+          </label>
+          <label class="field">
+            <span>Default genre</span>
+            <input id="lokrDefaultGenre" type="text" placeholder="optional default genre" />
+          </label>
+          <label class="field">
+            <span>Default language</span>
+            <input id="lokrDefaultLanguage" type="text" value="unknown" />
+          </label>
+          <label class="field">
+            <span>Tag position</span>
+            <select id="lokrTagPosition">
+              <option value="prepend">Prepend</option>
+              <option value="append">Append</option>
+              <option value="replace">Replace caption</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Genre ratio</span>
+            <input id="lokrGenreRatio" type="number" min="0" max="100" step="1" value="0" />
+          </label>
+          <label class="field">
+            <span>Samples</span>
+            <input id="lokrSampleCount" type="text" readonly />
+          </label>
+        </div>
+        <div class="toggle-row">
+          <label><input id="lokrAllInstrumental" type="checkbox" checked /> All instrumental</label>
+        </div>
+
+        <div id="lokrEntryList" class="lokr-entry-list">
+          <div class="empty-result">Create or select a dataset to add songs.</div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Add Songs</h2>
+            <span id="lokrEntryState" class="mini-state">Idle</span>
+          </div>
+
+          <div id="lokrDropZone" class="drop-zone">
+            <strong>Drop audio files here</strong>
+            <span>MP3, WAV, FLAC, OGG, M4A, OPUS</span>
+          </div>
+          <div class="file-picker">
+            <label class="file-button" for="lokrAudioFiles">Choose Audio Files</label>
+            <input id="lokrAudioFiles" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,.opus,audio/*" multiple />
+            <span id="lokrSelectedFiles">No files selected</span>
+          </div>
+
+          <div class="existing-source-picker">
+            <label class="field">
+              <span>Existing creation</span>
+              <select id="lokrAssetSelect">
+                <option value="">Choose an existing creation</option>
+              </select>
+            </label>
+            <button id="addLokrAssetButton" class="secondary-button" type="button">Add Creation</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Dataset Status</h2>
+            <span id="lokrValidationState" class="mini-state">No dataset</span>
+          </div>
+          <div id="lokrDatasetSummary" class="summary">LoKr datasets save as Side-Step / ACE-Step compatible JSON. Lyrics can be left instrumental with [Instrumental].</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Side-Step</h2>
+            <span id="lokrRunState" class="mini-state">Idle</span>
+          </div>
+          <div class="control-grid">
+            <label class="field">
+              <span>Model</span>
+              <select id="lokrTrainModel">
+                <option value="turbo" selected>ACE-Step 1.5 XL Turbo</option>
+                <option value="base">ACE-Step 1.5 XL Base</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Epochs</span>
+              <input id="lokrTrainEpochs" type="number" min="1" step="1" value="500" />
+            </label>
+            <label class="field">
+              <span>Save every</span>
+              <input id="lokrTrainSaveEvery" type="number" min="1" step="1" value="10" />
+            </label>
+            <label class="field">
+              <span>LoKr dim</span>
+              <input id="lokrTrainDim" type="number" min="1" step="1" value="64" />
+            </label>
+            <label class="field">
+              <span>LoKr alpha</span>
+              <input id="lokrTrainAlpha" type="number" min="1" step="1" value="128" />
+            </label>
+            <label class="field">
+              <span>Optimizer</span>
+              <select id="lokrTrainOptimizer">
+                <option value="adamw8bit" selected>AdamW 8-bit</option>
+                <option value="adamw">AdamW</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Batch size</span>
+              <input id="lokrTrainBatchSize" type="number" min="1" step="1" value="1" />
+            </label>
+            <label class="field">
+              <span>Grad accumulation</span>
+              <input id="lokrTrainGradAccum" type="number" min="1" step="1" value="4" />
+            </label>
+            <label class="field">
+              <span>Chunk duration seconds</span>
+              <input id="lokrTrainChunkDuration" type="number" min="1" step="1" placeholder="optional" />
+            </label>
+          </div>
+          <label class="field">
+            <span>Side-Step command</span>
+            <input id="lokrSidestepCommand" type="text" value="sidestep" />
+          </label>
+          <label class="field">
+            <span>Checkpoint dir</span>
+            <input id="lokrCheckpointDir" type="text" value="runtimes/ACE-Step-1.5/checkpoints" />
+          </label>
+          <div class="toggle-row">
+            <label><input id="lokrGradientCheckpointing" type="checkbox" checked /> Gradient checkpointing</label>
+            <label><input id="lokrOffloadEncoder" type="checkbox" checked /> Offload encoder</label>
+          </div>
+          <div class="button-row">
+            <button id="preprocessLokrButton" class="secondary-button" type="button">Preprocess Dataset</button>
+            <button id="trainLokrButton" class="primary-button" type="button">Start LoKr Training</button>
+          </div>
+          <div id="lokrRunList" class="generated-list">
+            <div class="empty-result">No Side-Step runs yet.</div>
+          </div>
+          <div id="lokrRunLog" class="activity-readout">Select a run to view logs.</div>
         </section>
       </aside>
     </main>

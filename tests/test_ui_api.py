@@ -58,6 +58,7 @@ def test_ui_index_includes_audio_editor_tab(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert "Dance Station" in response.text
     assert "Instrument Lab" in response.text
+    assert "LoKr Training" in response.text
     assert "Audio Editor" in response.text
     assert "Dance Station Assets" in response.text
     assert "Save Edited Result" in response.text
@@ -547,6 +548,211 @@ def test_ui_editor_assets_lists_dance_station_outputs(tmp_path: Path, monkeypatc
     assert labels["Clean edit"] == "edit"
     assert labels["Bass phrase"] == "instrument"
     assert all(item["audio_url"].startswith("/api/editor/audio?path=") for item in assets)
+
+
+def test_ui_lokr_dataset_create_upload_save_and_delete(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    source = make_wav(tmp_path / "song.wav", duration_ms=500)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+
+    created = client.post(
+        "/api/lokr/datasets",
+        json={
+            "label": "Horror style",
+            "custom_tag": "horrorstyle",
+            "default_genre": "Cinematic horror",
+            "default_language": "en",
+            "genre_ratio": 0,
+        },
+    )
+    assert created.status_code == 200
+    dataset = created.json()["dataset"]
+    dataset_id = dataset["metadata"]["dataset_id"]
+
+    with source.open("rb") as audio_file:
+        uploaded = client.post(
+            f"/api/lokr/datasets/{dataset_id}/entries/upload",
+            files={"file": ("song.wav", audio_file, "audio/wav")},
+        )
+    assert uploaded.status_code == 200
+    dataset = uploaded.json()["dataset"]
+    sample = dataset["samples"][0]
+    assert sample["audio_path"].startswith("./audio/")
+    assert sample["genre"] == "Cinematic horror"
+    assert sample["language"] == "en"
+    assert sample["lyrics"] == "[Instrumental]"
+    assert Path(sample["resolved_audio_path"]).exists()
+
+    sample["caption"] = "Suspenseful horror cue with low strings"
+    sample["is_instrumental"] = False
+    sample["lyrics"] = "[Verse]\nShadows rise"
+    sample["formatted_lyrics"] = sample["lyrics"]
+    saved = client.post(f"/api/lokr/datasets/{dataset_id}", json={"dataset": dataset})
+    assert saved.status_code == 200
+    saved_dataset = saved.json()["dataset"]
+    assert saved_dataset["metadata"]["num_samples"] == 1
+    assert saved_dataset["metadata"]["all_instrumental"] is False
+    assert saved_dataset["samples"][0]["caption"] == "Suspenseful horror cue with low strings"
+
+    dataset_json = tmp_path / "data" / "lokr-training" / "datasets" / dataset_id / "dataset.json"
+    body = json.loads(dataset_json.read_text(encoding="utf-8"))
+    assert body["samples"][0]["lyrics"] == "[Verse]\nShadows rise"
+    assert "resolved_audio_path" not in body["samples"][0]
+
+    deleted = client.delete(f"/api/lokr/datasets/{dataset_id}/entries/{sample['id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["dataset"]["samples"] == []
+
+
+def test_ui_lokr_dataset_imports_existing_creation(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    music_audio = make_wav(tmp_path / "music.wav", duration_ms=400)
+    write_result_metadata(
+        tmp_path / "data" / "generations",
+        "music-a",
+        "generation.json",
+        music_audio,
+        category="generation",
+        label="Generated cue",
+        id_key="generation_id",
+    )
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+    dataset = client.post(
+        "/api/lokr/datasets",
+        json={"label": "Generated dataset", "default_genre": "Dark ambient", "default_language": "unknown"},
+    ).json()["dataset"]
+    dataset_id = dataset["metadata"]["dataset_id"]
+
+    response = client.post(f"/api/lokr/datasets/{dataset_id}/entries/from-asset", json={"asset_id": "music-a"})
+
+    assert response.status_code == 200
+    sample = response.json()["dataset"]["samples"][0]
+    assert sample["label"] == "Generated cue"
+    assert sample["genre"] == "Dark ambient"
+    assert sample["language"] == "unknown"
+    assert sample["source_asset_id"] == "music-a"
+    assert sample["source_category"] == "generation"
+    assert Path(sample["resolved_audio_path"]).exists()
+
+
+def test_ui_lokr_preprocess_starts_sidestep_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = make_wav(tmp_path / "song.wav", duration_ms=400)
+    popen_calls = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(command, stdout=None, stderr=None):
+        popen_calls.append(command)
+        return Process()
+
+    monkeypatch.setattr("autotransition.ui.app.subprocess.Popen", fake_popen)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+    dataset = client.post("/api/lokr/datasets", json={"label": "Train set"}).json()["dataset"]
+    dataset_id = dataset["metadata"]["dataset_id"]
+    with source.open("rb") as audio_file:
+        client.post(
+            f"/api/lokr/datasets/{dataset_id}/entries/upload",
+            files={"file": ("song.wav", audio_file, "audio/wav")},
+        )
+
+    response = client.post(
+        f"/api/lokr/datasets/{dataset_id}/preprocess",
+        json={
+            "model": "turbo",
+            "sidestep_command": "sidestep",
+            "checkpoint_dir": "runtimes/ACE-Step-1.5/checkpoints",
+        },
+    )
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["type"] == "preprocess"
+    assert run["status"] == "running"
+    assert popen_calls[0][0:2] == ["sidestep", "preprocess"]
+    assert "--dataset-json" in popen_calls[0]
+    assert "--model" in popen_calls[0]
+    assert popen_calls[0][popen_calls[0].index("--model") + 1] == "turbo"
+
+
+def test_ui_lokr_train_uses_latest_completed_tensor_run(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    popen_calls = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(command, stdout=None, stderr=None):
+        popen_calls.append(command)
+        return Process()
+
+    monkeypatch.setattr("autotransition.ui.app.subprocess.Popen", fake_popen)
+    client = TestClient(create_app(models_dir=tmp_path / "models"))
+    dataset = client.post("/api/lokr/datasets", json={"label": "Train set"}).json()["dataset"]
+    dataset_id = dataset["metadata"]["dataset_id"]
+    tensor_dir = tmp_path / "data" / "lokr-training" / "runs" / "preprocess-a" / "tensors"
+    tensor_dir.mkdir(parents=True)
+    run_json = tmp_path / "data" / "lokr-training" / "runs" / "preprocess-a" / "run.json"
+    run_json.write_text(
+        json.dumps(
+            {
+                "run_id": "preprocess-a",
+                "type": "preprocess",
+                "dataset_id": dataset_id,
+                "label": "Preprocess",
+                "status": "complete",
+                "model": "turbo",
+                "tensor_dir": str(tensor_dir),
+                "created_at": "2026-06-26T00:00:00+00:00",
+                "log_path": str(tmp_path / "preprocess.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        f"/api/lokr/datasets/{dataset_id}/train",
+        json={
+            "model": "base",
+            "sidestep_command": "sidestep",
+            "checkpoint_dir": "runtimes/ACE-Step-1.5/checkpoints",
+            "epochs": 25,
+            "lokr_linear_dim": 32,
+            "lokr_linear_alpha": 64,
+            "save_every": 5,
+            "optimizer_type": "adamw8bit",
+            "batch_size": 1,
+            "gradient_accumulation": 4,
+            "gradient_checkpointing": True,
+            "offload_encoder": True,
+        },
+    )
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["type"] == "train"
+    assert run["adapter_type"] == "lokr"
+    assert popen_calls[0][0:3] == ["sidestep", "--yes", "train"]
+    assert popen_calls[0][popen_calls[0].index("--model") + 1] == "base"
+    assert popen_calls[0][popen_calls[0].index("--adapter-type") + 1] == "lokr"
+    assert popen_calls[0][popen_calls[0].index("--lokr-linear-dim") + 1] == "32"
+    assert popen_calls[0][popen_calls[0].index("--lokr-linear-alpha") + 1] == "64"
+    assert popen_calls[0][popen_calls[0].index("--batch-size") + 1] == "1"
+    assert popen_calls[0][popen_calls[0].index("--gradient-accumulation") + 1] == "4"
+    assert popen_calls[0][popen_calls[0].index("--dataset-dir") + 1] == str(tensor_dir)
+    assert "--gradient-checkpointing" in popen_calls[0]
+    assert "--offload-encoder" in popen_calls[0]
 
 
 def test_ui_instrument_lab_save_records_history_and_asset(tmp_path: Path, monkeypatch) -> None:

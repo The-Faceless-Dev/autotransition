@@ -253,6 +253,10 @@ h3 {
   grid-template-columns: minmax(300px, 0.42fr) minmax(560px, 1fr) minmax(300px, 0.38fr);
 }
 
+.workspace.lokr-page.active {
+  grid-template-columns: minmax(280px, 0.36fr) minmax(600px, 1fr) minmax(300px, 0.38fr);
+}
+
 .editor-assets-panel,
 .editor-save-panel {
   align-self: start;
@@ -289,6 +293,43 @@ h3 {
 
 .instrument-editor-panel {
   min-height: calc(100vh - 154px);
+}
+
+.lokr-editor-panel {
+  min-height: calc(100vh - 154px);
+}
+
+.lokr-dataset-item.active {
+  border-color: rgba(45, 212, 191, 0.68);
+}
+
+.lokr-entry-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.drop-zone {
+  display: grid;
+  gap: 6px;
+  place-items: center;
+  min-height: 118px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #111317;
+  color: var(--muted);
+  padding: 16px;
+  text-align: center;
+  margin-bottom: 14px;
+}
+
+.drop-zone strong {
+  color: var(--text);
+}
+
+.drop-zone.active {
+  border-color: var(--accent);
+  background: rgba(45, 212, 191, 0.08);
 }
 
 .compact-heading {
@@ -900,6 +941,10 @@ button:disabled {
   }
 
   .workspace.instrument-page.active {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace.lokr-page.active {
     grid-template-columns: 1fr;
   }
 

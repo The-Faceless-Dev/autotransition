@@ -10,6 +10,10 @@ const state = {
   advancedDirty: false,
   generatedResults: [],
   musicResults: [],
+  lokrDatasets: [],
+  activeLokrDatasetId: null,
+  lokrRuns: [],
+  selectedLokrRunId: null,
   instrumentClips: [],
   instrumentBank: [],
   instrumentTracks: [
@@ -58,11 +62,13 @@ const el = {
   transitionTabButton: document.querySelector("#transitionTabButton"),
   extractionTabButton: document.querySelector("#extractionTabButton"),
   musicTabButton: document.querySelector("#musicTabButton"),
+  lokrTrainingTabButton: document.querySelector("#lokrTrainingTabButton"),
   instrumentLabTabButton: document.querySelector("#instrumentLabTabButton"),
   audioEditTabButton: document.querySelector("#audioEditTabButton"),
   transitionPage: document.querySelector("#transitionPage"),
   extractionPage: document.querySelector("#extractionPage"),
   musicPage: document.querySelector("#musicPage"),
+  lokrTrainingPage: document.querySelector("#lokrTrainingPage"),
   instrumentLabPage: document.querySelector("#instrumentLabPage"),
   audioEditPage: document.querySelector("#audioEditPage"),
   ffmpegBadge: document.querySelector("#ffmpegBadge"),
@@ -168,6 +174,48 @@ const el = {
   musicActivity: document.querySelector("#musicActivity"),
   musicList: document.querySelector("#musicList"),
   musicLogList: document.querySelector("#musicLogList"),
+  lokrDatasetState: document.querySelector("#lokrDatasetState"),
+  lokrNewDatasetLabel: document.querySelector("#lokrNewDatasetLabel"),
+  createLokrDatasetButton: document.querySelector("#createLokrDatasetButton"),
+  refreshLokrDatasetsButton: document.querySelector("#refreshLokrDatasetsButton"),
+  lokrDatasetList: document.querySelector("#lokrDatasetList"),
+  lokrActiveDatasetReadout: document.querySelector("#lokrActiveDatasetReadout"),
+  saveLokrDatasetButton: document.querySelector("#saveLokrDatasetButton"),
+  lokrDatasetLabel: document.querySelector("#lokrDatasetLabel"),
+  lokrCustomTag: document.querySelector("#lokrCustomTag"),
+  lokrDefaultGenre: document.querySelector("#lokrDefaultGenre"),
+  lokrDefaultLanguage: document.querySelector("#lokrDefaultLanguage"),
+  lokrTagPosition: document.querySelector("#lokrTagPosition"),
+  lokrGenreRatio: document.querySelector("#lokrGenreRatio"),
+  lokrSampleCount: document.querySelector("#lokrSampleCount"),
+  lokrAllInstrumental: document.querySelector("#lokrAllInstrumental"),
+  lokrEntryList: document.querySelector("#lokrEntryList"),
+  lokrEntryState: document.querySelector("#lokrEntryState"),
+  lokrDropZone: document.querySelector("#lokrDropZone"),
+  lokrAudioFiles: document.querySelector("#lokrAudioFiles"),
+  lokrSelectedFiles: document.querySelector("#lokrSelectedFiles"),
+  lokrAssetSelect: document.querySelector("#lokrAssetSelect"),
+  addLokrAssetButton: document.querySelector("#addLokrAssetButton"),
+  lokrValidationState: document.querySelector("#lokrValidationState"),
+  lokrDatasetSummary: document.querySelector("#lokrDatasetSummary"),
+  lokrRunState: document.querySelector("#lokrRunState"),
+  lokrTrainModel: document.querySelector("#lokrTrainModel"),
+  lokrTrainEpochs: document.querySelector("#lokrTrainEpochs"),
+  lokrTrainSaveEvery: document.querySelector("#lokrTrainSaveEvery"),
+  lokrTrainDim: document.querySelector("#lokrTrainDim"),
+  lokrTrainAlpha: document.querySelector("#lokrTrainAlpha"),
+  lokrTrainOptimizer: document.querySelector("#lokrTrainOptimizer"),
+  lokrTrainBatchSize: document.querySelector("#lokrTrainBatchSize"),
+  lokrTrainGradAccum: document.querySelector("#lokrTrainGradAccum"),
+  lokrTrainChunkDuration: document.querySelector("#lokrTrainChunkDuration"),
+  lokrSidestepCommand: document.querySelector("#lokrSidestepCommand"),
+  lokrCheckpointDir: document.querySelector("#lokrCheckpointDir"),
+  lokrGradientCheckpointing: document.querySelector("#lokrGradientCheckpointing"),
+  lokrOffloadEncoder: document.querySelector("#lokrOffloadEncoder"),
+  preprocessLokrButton: document.querySelector("#preprocessLokrButton"),
+  trainLokrButton: document.querySelector("#trainLokrButton"),
+  lokrRunList: document.querySelector("#lokrRunList"),
+  lokrRunLog: document.querySelector("#lokrRunLog"),
   instrumentLabState: document.querySelector("#instrumentLabState"),
   instrumentClipLabel: document.querySelector("#instrumentClipLabel"),
   instrumentBpm: document.querySelector("#instrumentBpm"),
@@ -413,11 +461,13 @@ function setActivePage(page) {
   el.transitionPage.classList.toggle("active", page === "transition");
   el.extractionPage.classList.toggle("active", page === "extraction");
   el.musicPage.classList.toggle("active", page === "music");
+  el.lokrTrainingPage.classList.toggle("active", page === "lokr");
   el.instrumentLabPage.classList.toggle("active", page === "instrument");
   el.audioEditPage.classList.toggle("active", page === "audioedit");
   el.transitionTabButton.classList.toggle("active", page === "transition");
   el.extractionTabButton.classList.toggle("active", page === "extraction");
   el.musicTabButton.classList.toggle("active", page === "music");
+  el.lokrTrainingTabButton.classList.toggle("active", page === "lokr");
   el.instrumentLabTabButton.classList.toggle("active", page === "instrument");
   el.audioEditTabButton.classList.toggle("active", page === "audioedit");
   if (page === "instrument") {
@@ -488,7 +538,7 @@ function renderEditorAssets() {
 }
 
 function renderSourceAssetOptions() {
-  const selects = [el.sourceAssetSelect, el.extractSourceAssetSelect, el.instrumentAssetSelect].filter(Boolean);
+  const selects = [el.sourceAssetSelect, el.extractSourceAssetSelect, el.instrumentAssetSelect, el.lokrAssetSelect].filter(Boolean);
   selects.forEach((select) => {
     const current = select.value;
     select.replaceChildren();
@@ -514,6 +564,409 @@ function renderSourceAssetOptions() {
 function selectedSourceAsset(select) {
   const assetId = select.value;
   return state.editorAssets.find((asset) => asset.asset_id === assetId) || null;
+}
+
+function activeLokrDataset() {
+  return state.lokrDatasets.find((dataset) => dataset.metadata.dataset_id === state.activeLokrDatasetId) || null;
+}
+
+function setActiveLokrDataset(dataset) {
+  if (!dataset) return;
+  const existingIndex = state.lokrDatasets.findIndex((item) => item.metadata.dataset_id === dataset.metadata.dataset_id);
+  if (existingIndex >= 0) {
+    state.lokrDatasets[existingIndex] = dataset;
+  } else {
+    state.lokrDatasets.unshift(dataset);
+  }
+  state.activeLokrDatasetId = dataset.metadata.dataset_id;
+  renderLokrDatasets();
+  renderLokrDatasetEditor();
+}
+
+function renderLokrDatasets() {
+  el.lokrDatasetList.replaceChildren();
+  setPill(el.lokrDatasetState, `${state.lokrDatasets.length} datasets`, state.lokrDatasets.length ? "ok" : "neutral");
+  if (!state.lokrDatasets.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No LoKr datasets yet.";
+    el.lokrDatasetList.appendChild(empty);
+    return;
+  }
+  state.lokrDatasets.forEach((dataset) => {
+    const metadata = dataset.metadata || {};
+    const row = document.createElement("article");
+    row.className = `generated-item lokr-dataset-item${metadata.dataset_id === state.activeLokrDatasetId ? " active" : ""}`;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(metadata.label || metadata.name || "LoKr dataset")}</strong>
+        <span>${Number(metadata.num_samples || 0)} samples</span>
+      </div>
+      <div class="asset-path">${escapeHtml(metadata.custom_tag ? `Trigger: ${metadata.custom_tag}` : "No trigger tag")}</div>
+      <button class="secondary-button full-width" type="button">Open Dataset</button>
+    `;
+    row.querySelector("button").addEventListener("click", async () => {
+      const response = await api(`/api/lokr/datasets/${encodeURIComponent(metadata.dataset_id)}`);
+      setActiveLokrDataset(response);
+    });
+    el.lokrDatasetList.appendChild(row);
+  });
+}
+
+function renderLokrDatasetEditor() {
+  const dataset = activeLokrDataset();
+  el.lokrEntryList.replaceChildren();
+  if (!dataset) {
+    el.lokrActiveDatasetReadout.textContent = "No dataset selected";
+    el.lokrDatasetLabel.value = "";
+    el.lokrCustomTag.value = "";
+    el.lokrDefaultGenre.value = "";
+    el.lokrDefaultLanguage.value = "unknown";
+    el.lokrTagPosition.value = "prepend";
+    el.lokrGenreRatio.value = "0";
+    el.lokrSampleCount.value = "";
+    el.lokrAllInstrumental.checked = true;
+    el.saveLokrDatasetButton.disabled = true;
+    setPill(el.lokrValidationState, "No dataset", "neutral");
+    el.lokrDatasetSummary.textContent = "Create or select a dataset to begin adding songs.";
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "Create or select a dataset to add songs.";
+    el.lokrEntryList.appendChild(empty);
+    return;
+  }
+
+  const metadata = dataset.metadata || {};
+  const samples = dataset.samples || [];
+  el.lokrActiveDatasetReadout.textContent = metadata.dataset_id;
+  el.lokrDatasetLabel.value = metadata.label || metadata.name || "";
+  el.lokrCustomTag.value = metadata.custom_tag || "";
+  el.lokrDefaultGenre.value = metadata.default_genre || "";
+  el.lokrDefaultLanguage.value = metadata.default_language || "unknown";
+  el.lokrTagPosition.value = metadata.tag_position || "prepend";
+  el.lokrGenreRatio.value = String(metadata.genre_ratio ?? 0);
+  el.lokrSampleCount.value = `${samples.length}`;
+  el.lokrAllInstrumental.checked = Boolean(metadata.all_instrumental);
+  el.saveLokrDatasetButton.disabled = false;
+
+  const missingCaptions = samples.filter((sample) => !(sample.caption || "").trim()).length;
+  const tone = samples.length && !missingCaptions ? "ok" : samples.length ? "warn" : "neutral";
+  setPill(el.lokrValidationState, samples.length ? `${samples.length} samples` : "Empty", tone);
+  el.lokrDatasetSummary.innerHTML = [
+    `<strong>${escapeHtml(metadata.label || "LoKr dataset")}</strong>`,
+    `Samples: ${samples.length}`,
+    `Missing captions: ${missingCaptions}`,
+    `JSON: ${escapeHtml(dataset.metadata_path || "")}`,
+  ].join("<br>");
+
+  if (!samples.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No songs in this dataset yet.";
+    el.lokrEntryList.appendChild(empty);
+    return;
+  }
+
+  samples.forEach((sample, index) => {
+    const item = document.createElement("article");
+    item.className = "lokr-entry generated-item";
+    item.dataset.entryId = sample.id;
+    item.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(sample.label || sample.filename || `Sample ${index + 1}`)}</strong>
+        <span>${sample.duration ? `${Number(sample.duration).toFixed(1)}s` : "duration unknown"}</span>
+      </div>
+      ${sample.audio_url ? `<audio controls preload="metadata" src="${sample.audio_url}"></audio>` : ""}
+      <div class="control-grid">
+        <label class="field">
+          <span>Label</span>
+          <input class="lokr-entry-label" type="text" value="${escapeHtml(sample.label || "")}" />
+        </label>
+        <label class="field">
+          <span>Genre</span>
+          <input class="lokr-entry-genre" type="text" value="${escapeHtml(sample.genre || "")}" placeholder="optional" />
+        </label>
+        <label class="field">
+          <span>Language</span>
+          <input class="lokr-entry-language" type="text" value="${escapeHtml(sample.language || "unknown")}" />
+        </label>
+        <label class="field">
+          <span>BPM</span>
+          <input class="lokr-entry-bpm" type="text" value="${escapeHtml(String(sample.bpm ?? "N/A"))}" />
+        </label>
+        <label class="field">
+          <span>Key</span>
+          <input class="lokr-entry-keyscale" type="text" value="${escapeHtml(sample.keyscale || "N/A")}" />
+        </label>
+        <label class="field">
+          <span>Time signature</span>
+          <input class="lokr-entry-timesignature" type="text" value="${escapeHtml(sample.timesignature || "4")}" />
+        </label>
+      </div>
+      <label class="field">
+        <span>Caption</span>
+        <textarea class="lokr-entry-caption" rows="3" placeholder="Detailed description of the audible style and instrumentation">${escapeHtml(sample.caption || "")}</textarea>
+      </label>
+      <label class="field">
+        <span>Lyrics</span>
+        <textarea class="lokr-entry-lyrics" rows="4">${escapeHtml(sample.lyrics || "[Instrumental]")}</textarea>
+      </label>
+      <div class="control-grid">
+        <label class="field">
+          <span>Trigger tag override</span>
+          <input class="lokr-entry-custom-tag" type="text" value="${escapeHtml(sample.custom_tag || "")}" />
+        </label>
+        <label class="field">
+          <span>Prompt override</span>
+          <select class="lokr-entry-prompt-override">
+            <option value="">Dataset default</option>
+            <option value="caption"${sample.prompt_override === "caption" ? " selected" : ""}>Caption</option>
+            <option value="genre"${sample.prompt_override === "genre" ? " selected" : ""}>Genre</option>
+          </select>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <label><input class="lokr-entry-instrumental" type="checkbox"${sample.is_instrumental ? " checked" : ""} /> Instrumental</label>
+        <label><input class="lokr-entry-labeled" type="checkbox"${sample.labeled ? " checked" : ""} /> Labeled</label>
+      </div>
+      <div class="button-row generated-actions">
+        <button class="secondary-button lokr-delete-entry-button" type="button">Delete Entry</button>
+      </div>
+    `;
+    item.querySelector(".lokr-delete-entry-button").addEventListener("click", () => deleteLokrEntry(sample.id));
+    el.lokrEntryList.appendChild(item);
+  });
+}
+
+function lokrDatasetFromEditor() {
+  const dataset = activeLokrDataset();
+  if (!dataset) return null;
+  const metadata = {
+    ...(dataset.metadata || {}),
+    label: el.lokrDatasetLabel.value.trim() || "LoKr dataset",
+    name: el.lokrDatasetLabel.value.trim() || "LoKr dataset",
+    custom_tag: el.lokrCustomTag.value.trim(),
+    default_genre: el.lokrDefaultGenre.value.trim(),
+    default_language: el.lokrDefaultLanguage.value.trim() || "unknown",
+    tag_position: el.lokrTagPosition.value,
+    genre_ratio: Number(el.lokrGenreRatio.value || 0),
+    all_instrumental: el.lokrAllInstrumental.checked,
+  };
+  const samples = [...el.lokrEntryList.querySelectorAll(".lokr-entry")].map((row) => {
+    const original = (dataset.samples || []).find((sample) => sample.id === row.dataset.entryId) || {};
+    const instrumental = row.querySelector(".lokr-entry-instrumental").checked;
+    const lyrics = row.querySelector(".lokr-entry-lyrics").value.trim();
+    const genre = row.querySelector(".lokr-entry-genre").value.trim() || metadata.default_genre || "";
+    const language = row.querySelector(".lokr-entry-language").value.trim() || metadata.default_language || "unknown";
+    return {
+      ...original,
+      label: row.querySelector(".lokr-entry-label").value.trim(),
+      caption: row.querySelector(".lokr-entry-caption").value.trim(),
+      genre,
+      lyrics: instrumental ? "[Instrumental]" : lyrics || "[Instrumental]",
+      formatted_lyrics: instrumental ? "[Instrumental]" : lyrics || "[Instrumental]",
+      bpm: row.querySelector(".lokr-entry-bpm").value.trim() || "N/A",
+      keyscale: row.querySelector(".lokr-entry-keyscale").value.trim() || "N/A",
+      timesignature: row.querySelector(".lokr-entry-timesignature").value.trim() || "4",
+      language,
+      custom_tag: row.querySelector(".lokr-entry-custom-tag").value.trim(),
+      prompt_override: row.querySelector(".lokr-entry-prompt-override").value || null,
+      is_instrumental: instrumental,
+      labeled: row.querySelector(".lokr-entry-labeled").checked,
+    };
+  });
+  return { metadata, samples };
+}
+
+async function createLokrDataset() {
+  const label = el.lokrNewDatasetLabel.value.trim() || "New LoKr dataset";
+  const response = await api("/api/lokr/datasets", {
+    method: "POST",
+    body: JSON.stringify({ label, default_genre: "", default_language: "unknown" }),
+  });
+  setActiveLokrDataset(response.dataset);
+  showToast("LoKr dataset created");
+}
+
+async function refreshLokrDatasets() {
+  state.lokrDatasets = await api("/api/lokr/datasets");
+  if (state.activeLokrDatasetId && !state.lokrDatasets.some((dataset) => dataset.metadata.dataset_id === state.activeLokrDatasetId)) {
+    state.activeLokrDatasetId = null;
+  }
+  renderLokrDatasets();
+  renderLokrDatasetEditor();
+}
+
+async function saveLokrDataset() {
+  const dataset = lokrDatasetFromEditor();
+  if (!dataset) {
+    showToast("Select a LoKr dataset");
+    return;
+  }
+  const datasetId = activeLokrDataset().metadata.dataset_id;
+  const response = await api(`/api/lokr/datasets/${encodeURIComponent(datasetId)}`, {
+    method: "POST",
+    body: JSON.stringify({ dataset }),
+  });
+  setActiveLokrDataset(response.dataset);
+  showToast("LoKr dataset saved");
+}
+
+async function uploadLokrFiles(files) {
+  const dataset = activeLokrDataset();
+  if (!dataset) {
+    showToast("Create or select a LoKr dataset first");
+    return;
+  }
+  const fileList = [...files].filter(Boolean);
+  if (!fileList.length) return;
+  setPill(el.lokrEntryState, "Adding", "warn");
+  let latest = dataset;
+  try {
+    for (const file of fileList) {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch(`/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}/entries/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(formatApiDetail(body && body.detail ? body.detail : `Upload failed: ${response.status}`));
+      latest = body.dataset;
+    }
+    setActiveLokrDataset(latest);
+    setPill(el.lokrEntryState, "Added", "ok");
+    showToast("Audio added to LoKr dataset");
+  } catch (error) {
+    setPill(el.lokrEntryState, "Error", "error");
+    showToast(error.message);
+  }
+}
+
+async function addLokrAsset() {
+  const dataset = activeLokrDataset();
+  const asset = selectedSourceAsset(el.lokrAssetSelect);
+  if (!dataset || !asset) {
+    showToast("Choose a dataset and creation");
+    return;
+  }
+  const response = await api(`/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}/entries/from-asset`, {
+    method: "POST",
+    body: JSON.stringify({ asset_id: asset.asset_id }),
+  });
+  setActiveLokrDataset(response.dataset);
+  showToast("Creation added to LoKr dataset");
+}
+
+async function deleteLokrEntry(entryId) {
+  const dataset = activeLokrDataset();
+  if (!dataset) return;
+  const response = await api(
+    `/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}/entries/${encodeURIComponent(entryId)}`,
+    { method: "DELETE" },
+  );
+  setActiveLokrDataset(response.dataset);
+  showToast("LoKr dataset entry deleted");
+}
+
+function lokrRunPayload() {
+  return {
+    model: el.lokrTrainModel.value,
+    sidestep_command: el.lokrSidestepCommand.value.trim() || "sidestep",
+    checkpoint_dir: el.lokrCheckpointDir.value.trim() || "runtimes/ACE-Step-1.5/checkpoints",
+  };
+}
+
+function lokrTrainingPayload() {
+  return {
+    ...lokrRunPayload(),
+    epochs: numericValue(el.lokrTrainEpochs),
+    lokr_linear_dim: numericValue(el.lokrTrainDim),
+    lokr_linear_alpha: numericValue(el.lokrTrainAlpha),
+    save_every: numericValue(el.lokrTrainSaveEvery),
+    optimizer_type: el.lokrTrainOptimizer.value,
+    batch_size: numericValue(el.lokrTrainBatchSize),
+    gradient_accumulation: numericValue(el.lokrTrainGradAccum),
+    gradient_checkpointing: el.lokrGradientCheckpointing.checked,
+    offload_encoder: el.lokrOffloadEncoder.checked,
+    chunk_duration: numericValue(el.lokrTrainChunkDuration),
+  };
+}
+
+function renderLokrRuns() {
+  el.lokrRunList.replaceChildren();
+  const running = state.lokrRuns.filter((run) => run.status === "running").length;
+  setPill(el.lokrRunState, running ? `${running} running` : `${state.lokrRuns.length} runs`, running ? "warn" : state.lokrRuns.length ? "ok" : "neutral");
+  if (!state.lokrRuns.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No Side-Step runs yet.";
+    el.lokrRunList.appendChild(empty);
+    return;
+  }
+  state.lokrRuns.slice(0, 12).forEach((run) => {
+    const item = document.createElement("article");
+    item.className = `generated-item lokr-run-item${run.run_id === state.selectedLokrRunId ? " active" : ""}`;
+    item.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(run.label || run.run_id)}</strong>
+        <span>${escapeHtml(run.status || "unknown")}</span>
+      </div>
+      <div class="asset-path">${escapeHtml((run.command || []).join(" "))}</div>
+      <div class="button-row generated-actions">
+        <button class="secondary-button lokr-view-log-button" type="button">View Log</button>
+      </div>
+    `;
+    item.querySelector(".lokr-view-log-button").addEventListener("click", () => loadLokrRunLog(run.run_id));
+    el.lokrRunList.appendChild(item);
+  });
+}
+
+async function refreshLokrRuns() {
+  state.lokrRuns = await api("/api/lokr/runs");
+  renderLokrRuns();
+}
+
+async function loadLokrRunLog(runId) {
+  state.selectedLokrRunId = runId;
+  const response = await api(`/api/lokr/runs/${encodeURIComponent(runId)}/logs`);
+  el.lokrRunLog.textContent = response.text || "No log output yet.";
+  renderLokrRuns();
+}
+
+async function preprocessLokrDataset() {
+  const dataset = activeLokrDataset();
+  if (!dataset) {
+    showToast("Select a LoKr dataset first");
+    return;
+  }
+  const saved = await api(`/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}`, {
+    method: "POST",
+    body: JSON.stringify({ dataset: lokrDatasetFromEditor() }),
+  });
+  setActiveLokrDataset(saved.dataset);
+  const response = await api(`/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}/preprocess`, {
+    method: "POST",
+    body: JSON.stringify(lokrRunPayload()),
+  });
+  state.lokrRuns.unshift(response.run);
+  renderLokrRuns();
+  showToast("Side-Step preprocess started");
+}
+
+async function trainLokrDataset() {
+  const dataset = activeLokrDataset();
+  if (!dataset) {
+    showToast("Select a LoKr dataset first");
+    return;
+  }
+  const response = await api(`/api/lokr/datasets/${encodeURIComponent(dataset.metadata.dataset_id)}/train`, {
+    method: "POST",
+    body: JSON.stringify(lokrTrainingPayload()),
+  });
+  state.lokrRuns.unshift(response.run);
+  renderLokrRuns();
+  showToast("Side-Step LoKr training started");
 }
 
 async function loadExistingCreationAsTransitionSource() {
@@ -2200,7 +2653,7 @@ function addGeneratedResult(result, plan) {
 
 async function loadAll() {
   await loadInstrumentBank();
-  const [status, runtime, presets, models, tracks, extractions, musicGenerations, instrumentClips, editorAssets, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, lokrRuns, instrumentClips, editorAssets, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
@@ -2208,6 +2661,8 @@ async function loadAll() {
     api("/api/extractions/tracks"),
     api("/api/extractions"),
     api("/api/music-generations"),
+    api("/api/lokr/datasets"),
+    api("/api/lokr/runs"),
     api("/api/instrument-lab/clips"),
     api("/api/editor/assets"),
     api("/api/logs"),
@@ -2217,6 +2672,8 @@ async function loadAll() {
   state.extractionTracks = tracks;
   state.extractionResults = extractions;
   state.musicResults = musicGenerations;
+  state.lokrDatasets = lokrDatasets;
+  state.lokrRuns = lokrRuns;
   state.instrumentClips = instrumentClips;
   state.editorAssets = editorAssets;
   renderStatus(status);
@@ -2228,6 +2685,9 @@ async function loadAll() {
   applyMusicModelDefaults();
   syncMusicVocalControls();
   renderMusicList();
+  renderLokrDatasets();
+  renderLokrDatasetEditor();
+  renderLokrRuns();
   renderInstrumentTracks();
   renderInstrumentPianoKeys();
   drawInstrumentPianoRoll();
@@ -2611,6 +3071,7 @@ async function refreshStatus() {
   await refreshActivity();
   await refreshModels();
   await refreshEditorAssets();
+  await refreshLokrRuns();
   await refreshLogs();
   showToast("Status refreshed");
 }
@@ -2618,6 +3079,7 @@ async function refreshStatus() {
 el.transitionTabButton.addEventListener("click", () => setActivePage("transition"));
 el.extractionTabButton.addEventListener("click", () => setActivePage("extraction"));
 el.musicTabButton.addEventListener("click", () => setActivePage("music"));
+el.lokrTrainingTabButton.addEventListener("click", () => setActivePage("lokr"));
 el.instrumentLabTabButton.addEventListener("click", () => setActivePage("instrument"));
 el.audioEditTabButton.addEventListener("click", () => setActivePage("audioedit"));
 el.reloadAudioEditorButton.addEventListener("click", reloadAudioEditor);
@@ -2645,6 +3107,43 @@ el.mergeExtractionsButton.addEventListener("click", mergeSelectedExtractions);
 el.runMusicButton.addEventListener("click", runMusicGeneration);
 el.musicModelSelect.addEventListener("change", applyMusicModelDefaults);
 el.musicInstrumental.addEventListener("change", syncMusicVocalControls);
+el.createLokrDatasetButton.addEventListener("click", () => {
+  createLokrDataset().catch((error) => showToast(error.message));
+});
+el.refreshLokrDatasetsButton.addEventListener("click", () => {
+  refreshLokrDatasets()
+    .then(() => showToast("LoKr datasets refreshed"))
+    .catch((error) => showToast(error.message));
+});
+el.saveLokrDatasetButton.addEventListener("click", () => {
+  saveLokrDataset().catch((error) => showToast(error.message));
+});
+el.lokrAudioFiles.addEventListener("change", () => {
+  const files = el.lokrAudioFiles.files || [];
+  el.lokrSelectedFiles.textContent = files.length ? `${files.length} file${files.length === 1 ? "" : "s"} selected` : "No files selected";
+  uploadLokrFiles(files).catch((error) => showToast(error.message));
+});
+el.addLokrAssetButton.addEventListener("click", () => {
+  addLokrAsset().catch((error) => showToast(error.message));
+});
+el.preprocessLokrButton.addEventListener("click", () => {
+  preprocessLokrDataset().catch((error) => showToast(error.message));
+});
+el.trainLokrButton.addEventListener("click", () => {
+  trainLokrDataset().catch((error) => showToast(error.message));
+});
+el.lokrDropZone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  el.lokrDropZone.classList.add("active");
+});
+el.lokrDropZone.addEventListener("dragleave", () => {
+  el.lokrDropZone.classList.remove("active");
+});
+el.lokrDropZone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  el.lokrDropZone.classList.remove("active");
+  uploadLokrFiles(event.dataTransfer.files).catch((error) => showToast(error.message));
+});
 el.addInstrumentTrackButton.addEventListener("click", addInstrumentTrack);
 el.importInstrumentAssetButton.addEventListener("click", importInstrumentAssetTrack);
 el.playInstrumentButton.addEventListener("click", playInstrumentLab);
