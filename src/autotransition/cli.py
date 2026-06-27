@@ -31,6 +31,7 @@ from autotransition.runtime.ace_step import (
     start_api_foreground,
     stop_runtime_process_tree,
 )
+from autotransition.runtime.side_step import build_side_step_install_commands, run_side_step_install, side_step_status
 from autotransition.ui import create_app
 
 app = typer.Typer(help="Build and manage AI music transition pipeline artifacts.")
@@ -73,26 +74,37 @@ def doctor_all(
     config = RuntimeConfig(ace_step_dir=runtime_dir, api_host=host, api_port=port)
     for check in runtime_doctor(config):
         typer.echo(f"{check.status.value}: {check.name} - {check.message}")
+    side_step = side_step_status(config)
+    typer.echo(("ok" if side_step.installed else "warn") + f": sidestep - {side_step.message}")
 
 
 @app.command()
 def setup(
     runtime_dir: Path = typer.Option(Path("runtimes/ACE-Step-1.5"), help="ACE-Step runtime install directory."),
+    side_step_dir: Path = typer.Option(Path("runtimes/Side-Step"), help="Side-Step runtime install directory."),
     skip_runtime: bool = typer.Option(False, "--skip-runtime", help="Skip ACE-Step runtime setup."),
+    skip_sidestep: bool = typer.Option(False, "--skip-sidestep", help="Skip Side-Step runtime setup."),
     print_only: bool = typer.Option(False, "--print-only", help="Print setup commands without running."),
 ) -> None:
     """Set up Autotransition for first use."""
 
-    config = RuntimeConfig(ace_step_dir=runtime_dir)
+    config = RuntimeConfig(ace_step_dir=runtime_dir, side_step_dir=side_step_dir)
     if print_only:
         typer.echo("First-time setup commands:")
         for command in build_install_commands(config):
             typer.echo(command)
+        if not skip_sidestep:
+            for command in build_side_step_install_commands(config):
+                typer.echo(command)
         return
     if skip_runtime:
         typer.echo("Skipped ACE-Step runtime setup.")
-        return
-    run_install(config)
+    else:
+        run_install(config)
+    if skip_sidestep:
+        typer.echo("Skipped Side-Step runtime setup.")
+    else:
+        run_side_step_install(config)
     typer.echo("Setup complete.")
     typer.echo("Run the app with: autotransition run")
 
@@ -192,21 +204,45 @@ def start_command(
 @runtime_app.command("setup")
 def setup_runtime(
     runtime_dir: Path = typer.Option(Path("runtimes/ACE-Step-1.5"), help="ACE-Step runtime install directory."),
+    side_step_dir: Path = typer.Option(Path("runtimes/Side-Step"), help="Side-Step runtime install directory."),
     print_only: bool = typer.Option(False, "--print-only", help="Print setup commands without running them."),
     execute: bool = typer.Option(False, "--execute", help="Deprecated; setup now runs by default."),
+    skip_sidestep: bool = typer.Option(False, "--skip-sidestep", help="Skip Side-Step runtime setup."),
 ) -> None:
-    """Run first-time ACE-Step runtime setup."""
+    """Run first-time external runtime setup."""
 
-    config = RuntimeConfig(ace_step_dir=runtime_dir)
+    config = RuntimeConfig(ace_step_dir=runtime_dir, side_step_dir=side_step_dir)
     if print_only:
         typer.echo("First-time setup commands:")
         for command in build_install_commands(config):
             typer.echo(command)
+        if not skip_sidestep:
+            for command in build_side_step_install_commands(config):
+                typer.echo(command)
         return
 
     run_install(config)
     typer.echo("ACE-Step runtime setup complete.")
+    if not skip_sidestep:
+        run_side_step_install(config)
+        typer.echo("Side-Step runtime setup complete.")
     typer.echo("Next: autotransition runtime start")
+
+
+@runtime_app.command("setup-sidestep")
+def setup_side_step(
+    side_step_dir: Path = typer.Option(Path("runtimes/Side-Step"), help="Side-Step runtime install directory."),
+    print_only: bool = typer.Option(False, "--print-only", help="Print setup commands without running them."),
+) -> None:
+    """Run first-time Side-Step runtime setup."""
+
+    config = RuntimeConfig(side_step_dir=side_step_dir)
+    if print_only:
+        for command in build_side_step_install_commands(config):
+            typer.echo(command)
+        return
+    run_side_step_install(config)
+    typer.echo("Side-Step runtime setup complete.")
 
 
 @runtime_app.command("start")

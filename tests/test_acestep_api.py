@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -619,6 +620,164 @@ def test_text2music_standalone_passes_vocal_lyrics_and_language(tmp_path: Path, 
 
     assert captured_payloads[0]["lyrics"] == "This is the chorus"
     assert captured_payloads[0]["vocal_language"] == "en"
+
+
+def test_text2music_standalone_reuses_active_lokr_adapter(tmp_path: Path, monkeypatch) -> None:
+    weights = tmp_path / "adapter" / "lokr_weights.safetensors"
+    weights.parent.mkdir(parents=True)
+    weights.write_bytes(b"weights")
+    calls = []
+
+    class Response:
+        def __init__(self, body, status_code=200, content=b"music") -> None:
+            self._body = body
+            self.status_code = status_code
+            self.content = content
+            self.text = str(body)
+            self.request = SimpleNamespace(method="POST", url="http://127.0.0.1:8001")
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        calls.append(("get", url, kwargs))
+        if url.endswith("/v1/model_inventory"):
+            return Response(
+                {
+                    "data": {
+                        "models": [{"name": "acestep-v15-turbo", "is_loaded": True}],
+                        "lm_models": [{"name": DEFAULT_LM_MODEL_PATH, "is_loaded": True}],
+                    }
+                }
+            )
+        if url.endswith("/v1/lora/status"):
+            return Response(
+                {
+                    "data": {
+                        "lora_loaded": True,
+                        "use_lora": True,
+                        "active_adapter": "dance_station_train_a",
+                    }
+                }
+            )
+        if url.endswith("/v1/audio"):
+            return Response({}, content=b"music")
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        if url.endswith("/v1/lora/unload") or url.endswith("/v1/lora/load"):
+            raise AssertionError("same active LoKr adapter should not be unloaded or reloaded")
+        if url.endswith("/v1/lora/scale"):
+            assert kwargs["json"] == {"scale": 0.6, "adapter_name": "dance_station_train_a"}
+            return Response({"data": {"message": "ok"}})
+        if url.endswith("/v1/lora/toggle"):
+            assert kwargs["json"] == {"use_lora": True}
+            return Response({"data": {"message": "ok"}})
+        if url.endswith("/release_task"):
+            return Response({"data": {"task_id": "task-1"}})
+        if url.endswith("/query_result"):
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "music.flac"}]})
+        return Response({})
+
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(get=fake_get, post=fake_post))
+
+    AceStepApiClient(RuntimeConfig()).text2music_standalone(
+        prompt="artist style",
+        model="acestep-v15-turbo",
+        save_dir=tmp_path / "music",
+        lokr_path=weights,
+        lokr_scale=0.6,
+        lokr_adapter_name="dance_station_train_a",
+    )
+
+    endpoints = [call[1] for call in calls]
+    assert any(endpoint.endswith("/v1/lora/status") for endpoint in endpoints)
+    assert any(endpoint.endswith("/v1/lora/scale") for endpoint in endpoints)
+    assert any(endpoint.endswith("/v1/lora/toggle") for endpoint in endpoints)
+    assert not any(endpoint.endswith("/v1/lora/unload") for endpoint in endpoints)
+    assert not any(endpoint.endswith("/v1/lora/load") for endpoint in endpoints)
+
+
+def test_text2music_standalone_disables_lokr_without_unloading(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    class Response:
+        def __init__(self, body, status_code=200, content=b"music") -> None:
+            self._body = body
+            self.status_code = status_code
+            self.content = content
+            self.text = str(body)
+            self.request = SimpleNamespace(method="POST", url="http://127.0.0.1:8001")
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        calls.append(("get", url, kwargs))
+        if url.endswith("/v1/audio"):
+            return Response({}, content=b"music")
+        return Response({})
+
+    def fake_post(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        if url.endswith("/v1/lora/unload"):
+            raise AssertionError("normal generation should disable LoKr without unloading it")
+        if url.endswith("/v1/lora/toggle"):
+            assert kwargs["json"] == {"use_lora": False}
+            return Response({"data": {"message": "ok"}})
+        if url.endswith("/release_task"):
+            return Response({"data": {"task_id": "task-1"}})
+        if url.endswith("/query_result"):
+            return Response({"data": [{"task_id": "task-1", "status": 1, "file": "music.flac"}]})
+        return Response({})
+
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(get=fake_get, post=fake_post))
+
+    AceStepApiClient(RuntimeConfig()).text2music_standalone(
+        prompt="plain generation",
+        model="acestep-v15-turbo",
+        save_dir=tmp_path / "music",
+    )
+
+    endpoints = [call[1] for call in calls]
+    assert any(endpoint.endswith("/v1/lora/toggle") for endpoint in endpoints)
+    assert not any(endpoint.endswith("/v1/lora/unload") for endpoint in endpoints)
+
+
+def test_download_result_deletes_ace_temp_audio_after_copy(tmp_path: Path, monkeypatch) -> None:
+    runtime_dir = tmp_path / "runtime"
+    temp_audio = runtime_dir / ".cache" / "acestep" / "tmp" / "api_audio" / "generated.flac"
+    temp_audio.parent.mkdir(parents=True)
+    temp_audio.write_bytes(b"temp")
+
+    class Response:
+        def __init__(self, body=None, status_code=200, content=b"downloaded") -> None:
+            self._body = body or {}
+            self.status_code = status_code
+            self.content = content
+            self.text = str(self._body)
+            self.request = SimpleNamespace(method="GET", url="http://127.0.0.1:8001")
+
+        def json(self):
+            return self._body
+
+    def fake_get(url, **kwargs):
+        assert url.endswith("/v1/audio")
+        return Response(content=b"downloaded")
+
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(get=fake_get))
+
+    result = AceStepApiClient(RuntimeConfig(ace_step_dir=runtime_dir))._download_result(
+        {"file": str(temp_audio), "status": 1},
+        tmp_path / "music",
+        "task-1",
+    )
+    metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+
+    assert result.output_path.read_bytes() == b"downloaded"
+    assert not temp_audio.exists()
+    assert metadata["ace_temp_audio_cleanup"]["deleted"] is True
 
 
 def test_text2music_uses_working_bpm_and_key_defaults_when_ui_omits_them(tmp_path: Path, monkeypatch) -> None:

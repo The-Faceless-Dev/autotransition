@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -11,7 +12,7 @@ from typing import Any
 
 from autotransition.config import RuntimeConfig
 from autotransition.models.base import RepaintResult
-from autotransition.models.registry import ModelProfile
+from autotransition.models.registry import ACE_STEP_MODELS, ModelProfile
 from autotransition.pipeline import SourceSelectionPlan
 
 
@@ -270,10 +271,19 @@ class AceStepApiClient:
         velocity_norm_threshold: float = 0.0,
         velocity_ema_factor: float = 0.0,
         seed: int | None = None,
+        lokr_path: str | Path | None = None,
+        lokr_scale: float = 1.0,
+        lokr_adapter_name: str | None = None,
     ) -> RepaintResult:
         is_base = model == ACE_STEP_BASE_MODEL
         if is_base:
             self._ensure_base_extract_model()
+        elif lokr_path and model in ACE_STEP_MODELS:
+            self._ensure_model(ACE_STEP_MODELS[model], init_llm=True, lm_model_path=DEFAULT_LM_MODEL_PATH)
+        if lokr_path:
+            self._prepare_lokr_adapter(lokr_path, lokr_scale, adapter_name=lokr_adapter_name)
+        else:
+            self._disable_lokr_adapter()
         payload: dict[str, Any] = {
             "task_type": "text2music",
             "prompt": prompt,
@@ -309,6 +319,71 @@ class AceStepApiClient:
             payload["use_random_seed"] = False
             payload["seed"] = seed
         return self._submit_and_wait(payload=payload, save_dir=save_dir, use_json=True)
+
+    def _prepare_lokr_adapter(
+        self,
+        lokr_path: str | Path,
+        lokr_scale: float,
+        *,
+        adapter_name: str | None = None,
+    ) -> None:
+        path = Path(lokr_path).expanduser().resolve()
+        if not path.exists():
+            raise AceStepApiError(f"LoKr adapter weights were not found: {path}")
+        effective_name = _stable_lokr_adapter_name(path, adapter_name)
+        status = self._get_lora_status(ignore_errors=True) or {}
+        active_adapter = _lora_active_adapter(status)
+        if active_adapter != effective_name:
+            if _lora_loaded(status):
+                self._post_lora_endpoint("unload", {}, ignore_errors=True)
+            self._post_lora_endpoint("load", {"lora_path": str(path), "adapter_name": effective_name})
+        self._post_lora_endpoint("scale", {"scale": lokr_scale, "adapter_name": effective_name})
+        self._post_lora_endpoint("toggle", {"use_lora": True})
+
+    def _disable_lokr_adapter(self) -> None:
+        self._post_lora_endpoint("toggle", {"use_lora": False}, ignore_errors=True)
+
+    def _get_lora_status(self, *, ignore_errors: bool = False) -> dict[str, Any] | None:
+        try:
+            response = _request(
+                "get",
+                f"{self.config.api_base_url}/v1/lora/status",
+                "v1/lora/status",
+                timeout=self.config.api_timeout_seconds,
+            )
+            _raise_api_status(response, "v1/lora/status")
+            body = _response_json(response, "v1/lora/status")
+            if body.get("error") or int(body.get("code") or 200) >= 400:
+                raise AceStepApiError(str(body.get("error") or body))
+            data = body.get("data")
+            return data if isinstance(data, dict) else body
+        except Exception as exc:
+            if ignore_errors:
+                return None
+            if isinstance(exc, AceStepApiError):
+                raise
+            raise AceStepApiError(f"ACE-Step LoKr status failed: {exc}") from exc
+
+    def _post_lora_endpoint(self, endpoint: str, payload: dict[str, Any], *, ignore_errors: bool = False) -> dict[str, Any] | None:
+        try:
+            response = _request(
+                "post",
+                f"{self.config.api_base_url}/v1/lora/{endpoint}",
+                f"v1/lora/{endpoint}",
+                json=payload,
+                timeout=self.config.api_timeout_seconds,
+            )
+            _raise_api_status(response, f"v1/lora/{endpoint}")
+            body = _response_json(response, f"v1/lora/{endpoint}")
+            if body.get("error") or int(body.get("code") or 200) >= 400:
+                raise AceStepApiError(str(body.get("error") or body))
+            return body
+        except Exception as exc:
+            if ignore_errors:
+                return None
+            if isinstance(exc, AceStepApiError):
+                raise
+            raise AceStepApiError(f"ACE-Step LoKr {endpoint} failed: {exc}") from exc
 
     def _submit_and_wait(
         self,
@@ -395,14 +470,33 @@ class AceStepApiClient:
         )
         _raise_api_status(response, "v1/audio")
         output_path.write_bytes(response.content)
+        temp_cleanup = self._cleanup_ace_temp_audio(audio_path)
         metadata = {
             **task_result,
             "downloaded_audio_path": str(output_path),
             "ace_audio_path": audio_path,
+            "ace_temp_audio_cleanup": temp_cleanup,
         }
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
         return RepaintResult(output_path=output_path, metadata_path=metadata_path, model_name="ACE-Step API")
+
+    def _cleanup_ace_temp_audio(self, audio_path: str) -> dict[str, Any]:
+        path = Path(audio_path).expanduser()
+        temp_dir = self.config.ace_step_dir / ".cache" / "acestep" / "tmp" / "api_audio"
+        try:
+            resolved = path.resolve(strict=False)
+            resolved_temp_dir = temp_dir.resolve(strict=False)
+            resolved.relative_to(resolved_temp_dir)
+        except Exception:
+            return {"deleted": False, "reason": "outside_ace_temp_audio", "path": audio_path}
+        if not resolved.is_file():
+            return {"deleted": False, "reason": "not_found", "path": str(resolved)}
+        try:
+            resolved.unlink()
+        except OSError as exc:
+            return {"deleted": False, "reason": f"delete_failed: {exc}", "path": str(resolved)}
+        return {"deleted": True, "path": str(resolved)}
 
     def _ensure_model(
         self,
@@ -549,6 +643,25 @@ def _normalize_audio_path(value: str) -> str:
         if query_path:
             return query_path[0]
     return value
+
+
+def _stable_lokr_adapter_name(path: Path, requested_name: str | None = None) -> str:
+    if requested_name:
+        cleaned = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in requested_name.strip())
+        cleaned = cleaned.strip("_-")
+        if cleaned:
+            return cleaned[:64]
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:16]
+    return f"dance_station_lokr_{digest}"
+
+
+def _lora_loaded(status: dict[str, Any]) -> bool:
+    return bool(status.get("lora_loaded") or status.get("loaded"))
+
+
+def _lora_active_adapter(status: dict[str, Any]) -> str | None:
+    active = status.get("active_adapter")
+    return active if isinstance(active, str) and active else None
 
 
 def _raw_text2music_audio_format(app_output_format: str) -> str:
