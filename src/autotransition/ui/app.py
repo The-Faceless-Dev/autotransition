@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
 import subprocess
 from urllib.parse import quote
@@ -50,6 +52,7 @@ from autotransition.models.acestep_api import (
     _repaint_defaults_for_profile,
     _text2music_defaults_for_profile,
 )
+from autotransition.runtime.side_step import build_side_step_command, side_step_status
 from autotransition.models.download import local_model_path
 from autotransition.models.status import InstallState
 from autotransition.pipeline import (
@@ -182,6 +185,8 @@ class MusicGenerationRequest(BaseModel):
     velocity_norm_threshold: float = Field(0.0, ge=0)
     velocity_ema_factor: float = Field(0.0, ge=0, le=1)
     seed: int | None = None
+    lokr_adapter_id: str | None = None
+    lokr_scale: float = Field(1.0, ge=0.0, le=1.0)
 
 
 class LokrDatasetCreateRequest(BaseModel):
@@ -204,13 +209,13 @@ class LokrDatasetAssetRequest(BaseModel):
 
 class LokrPreprocessRequest(BaseModel):
     model: Literal["turbo", "base"] = "turbo"
-    sidestep_command: str = "sidestep"
+    sidestep_command: str = "uv run sidestep"
     checkpoint_dir: str = "runtimes/ACE-Step-1.5/checkpoints"
 
 
 class LokrTrainRequest(BaseModel):
     model: Literal["turbo", "base"] = "turbo"
-    sidestep_command: str = "sidestep"
+    sidestep_command: str = "uv run sidestep"
     checkpoint_dir: str = "runtimes/ACE-Step-1.5/checkpoints"
     tensor_dir: str | None = None
     epochs: int = Field(500, ge=1)
@@ -228,6 +233,13 @@ class LokrTrainRequest(BaseModel):
 def _music_generation_model(value: str) -> str:
     model = (value or "").strip()
     if model in {"acestep-v15-base", "acestep-v15-xl-base"}:
+        return "acestep-v15-base"
+    return "acestep-v15-turbo"
+
+
+def _lokr_training_model_to_generation_model(value: str | None) -> str:
+    model = (value or "").strip()
+    if model == "base":
         return "acestep-v15-base"
     return "acestep-v15-turbo"
 
@@ -555,8 +567,6 @@ def _lokr_clean_dataset(dataset: dict[str, Any], dataset_id: str | None = None) 
         for sample in list(dataset.get("samples") or [])
     ]
     all_instrumental = bool(metadata.get("all_instrumental", True))
-    if samples:
-        all_instrumental = all(sample.get("is_instrumental") for sample in samples)
     return {
         "metadata": {
             "dataset_id": dataset_id,
@@ -684,6 +694,168 @@ def _now_iso() -> str:
 _LOKR_PROCESSES: dict[str, subprocess.Popen[bytes]] = {}
 
 
+def _active_lokr_run() -> dict[str, Any] | None:
+    for run in _lokr_runs():
+        if run.get("status") == "running":
+            return run
+    return None
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
+def _lokr_preprocess_log_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    if metadata.get("type") != "preprocess":
+        return {}
+    log_path = Path(str(metadata.get("log_path") or ""))
+    if not log_path.exists():
+        return {}
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    processed_match = re.search(r"Preprocessing complete:\s*(\d+)/(\d+)\s+processed,\s*(\d+)\s+failed", log_text)
+    if processed_match:
+        return {
+            "processed_samples": int(processed_match.group(1)),
+            "total_samples": int(processed_match.group(2)),
+            "failed_samples": int(processed_match.group(3)),
+            "summary": f"Processed {processed_match.group(1)}/{processed_match.group(2)} samples",
+        }
+    processed_line = re.search(r"Processed:\s*(\d+)/(\d+)", log_text)
+    if processed_line:
+        return {
+            "processed_samples": int(processed_line.group(1)),
+            "total_samples": int(processed_line.group(2)),
+            "summary": f"Processed {processed_line.group(1)}/{processed_line.group(2)} samples",
+        }
+    return {}
+
+
+def _lokr_train_log_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    if metadata.get("type") != "train":
+        return {}
+    progress_summary = _lokr_train_progress_summary(metadata)
+    if progress_summary:
+        return progress_summary
+    log_path = Path(str(metadata.get("log_path") or ""))
+    if not log_path.is_file():
+        return {}
+    log_text = _strip_ansi(log_path.read_text(encoding="utf-8", errors="replace"))
+    if "Training summary complete" in log_text:
+        steps = re.search(r"Training summary complete \(steps=(\d+)\)", log_text)
+        summary = f"Training complete ({steps.group(1)} steps)" if steps else "Training complete"
+        return {"summary": summary}
+    session_match = re.search(r"\[INFO\]\s+Session:\s*(.+)", log_text)
+    sample_match = re.search(r"PreprocessedTensorDataset:\s*(\d+)\s+samples", log_text)
+    epoch_matches = re.findall(r"Epoch\s+(\d+)(?:/(\d+))?", log_text)
+    loss_matches = re.findall(r"(?:train/)?loss[=:\s]+([0-9]+(?:\.[0-9]+)?(?:e[-+]?\d+)?)", log_text, flags=re.IGNORECASE)
+    parts: list[str] = []
+    if epoch_matches:
+        epoch, total = epoch_matches[-1]
+        parts.append(f"Epoch {epoch}{f'/{total}' if total else ''}")
+    if loss_matches:
+        parts.append(f"loss {loss_matches[-1]}")
+    if sample_match:
+        parts.append(f"{sample_match.group(1)} samples")
+    if parts:
+        return {"summary": "Training " + " | ".join(parts)}
+    meaningful_lines = [
+        line.strip()
+        for line in log_text.replace("\r", "\n").splitlines()
+        if line.strip() and not set(line.strip()) <= {"=", "-", "*"}
+    ]
+    if meaningful_lines:
+        last_line = meaningful_lines[-1]
+        if len(last_line) > 180:
+            last_line = f"{last_line[:177]}..."
+        result = {"summary": last_line}
+        if session_match:
+            result["session"] = session_match.group(1).strip()
+        return result
+    return {}
+
+
+def _lokr_train_progress_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    progress_path = _lokr_train_progress_path(metadata)
+    if not progress_path.exists():
+        return {}
+    last: dict[str, Any] | None = None
+    for line in progress_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            last = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    if not last:
+        return {}
+    epoch = last.get("epoch")
+    max_epochs = last.get("max_epochs")
+    step = last.get("step")
+    loss = last.get("loss")
+    summary_parts = []
+    if epoch is not None:
+        summary_parts.append(f"Epoch {epoch}{f'/{max_epochs}' if max_epochs else ''}")
+    if step is not None:
+        summary_parts.append(f"step {step}")
+    if loss is not None:
+        try:
+            summary_parts.append(f"loss {float(loss):.4f}")
+        except (TypeError, ValueError):
+            summary_parts.append(f"loss {loss}")
+    if not summary_parts:
+        return {}
+    return {
+        "summary": "Training " + " | ".join(summary_parts),
+        "progress_path": str(progress_path),
+        "current_epoch": epoch,
+        "max_epochs": max_epochs,
+        "current_step": step,
+        "loss": loss,
+    }
+
+
+def _lokr_train_progress_path(metadata: dict[str, Any]) -> Path:
+    output_dir = Path(str(metadata.get("output_dir") or ""))
+    if not output_dir:
+        return Path()
+    return output_dir / ".progress.jsonl"
+
+
+def _lokr_train_session_log_path(metadata: dict[str, Any]) -> Path:
+    output_dir = Path(str(metadata.get("output_dir") or ""))
+    if not output_dir:
+        return Path()
+    session_dir = output_dir / "session_logs"
+    if not session_dir.exists():
+        return Path()
+    logs = sorted(session_dir.glob("*_ui.log"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return logs[0] if logs else Path()
+
+
+def _lokr_enrich_run(metadata: dict[str, Any]) -> dict[str, Any]:
+    summary = _lokr_preprocess_log_summary(metadata)
+    if not summary:
+        summary = _lokr_train_log_summary(metadata)
+    if summary:
+        metadata.update(summary)
+    if metadata.get("type") == "preprocess" and metadata.get("status") == "complete":
+        metadata["ready_to_train"] = bool(metadata.get("tensor_dir")) and Path(str(metadata["tensor_dir"])).exists()
+    return metadata
+
+
+def _hidden_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        "startupinfo": startupinfo,
+    }
+
+
 def _lokr_run_metadata(
     *,
     run_id: str,
@@ -695,6 +867,7 @@ def _lokr_run_metadata(
     model: str,
     tensor_dir: Path | None = None,
     output_dir: Path | None = None,
+    cwd: Path | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
@@ -706,6 +879,7 @@ def _lokr_run_metadata(
         "model": model,
         "command": command,
         "log_path": str(log_path),
+        "cwd": str(cwd) if cwd is not None else "",
         "created_at": _now_iso(),
         "started_at": "",
         "completed_at": "",
@@ -732,7 +906,14 @@ def _start_lokr_process(metadata: dict[str, Any]) -> dict[str, Any]:
     _write_metadata(_lokr_run_path(run_id), metadata)
     try:
         log_file = log_path.open("ab")
-        process = subprocess.Popen(metadata["command"], stdout=log_file, stderr=subprocess.STDOUT)
+        cwd = str(metadata.get("cwd") or "") or None
+        process = subprocess.Popen(
+            metadata["command"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=cwd,
+            **_hidden_subprocess_kwargs(),
+        )
     except Exception as exc:
         metadata["status"] = "failed"
         metadata["message"] = str(exc)
@@ -740,32 +921,154 @@ def _start_lokr_process(metadata: dict[str, Any]) -> dict[str, Any]:
         _write_metadata(_lokr_run_path(run_id), metadata)
         return metadata
     _LOKR_PROCESSES[run_id] = process
+    metadata["pid"] = process.pid
+    _write_metadata(_lokr_run_path(run_id), metadata)
     return metadata
+
+
+def _stop_lokr_process(run_id: str) -> dict[str, Any]:
+    metadata = _read_json_file(_lokr_run_path(run_id), "LoKr run")
+    if metadata.get("status") != "running":
+        return _lokr_enrich_run(_refresh_lokr_run(metadata))
+    process = _LOKR_PROCESSES.get(run_id)
+    if process is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This Side-Step run is not managed by the current app process. Stop it from the terminal or restart the machine/runtime.",
+        )
+    metadata = _refresh_lokr_run(metadata)
+    if metadata.get("status") != "running":
+        return _lokr_enrich_run(metadata)
+    try:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to stop Side-Step run: {exc}") from exc
+    finally:
+        _LOKR_PROCESSES.pop(run_id, None)
+    metadata["status"] = "stopped"
+    metadata["message"] = "Stopped by user."
+    metadata["returncode"] = process.poll()
+    metadata["completed_at"] = _now_iso()
+    _write_metadata(_lokr_run_path(run_id), metadata)
+    return _lokr_enrich_run(metadata)
 
 
 def _refresh_lokr_run(metadata: dict[str, Any]) -> dict[str, Any]:
     if metadata.get("status") != "running":
-        return metadata
+        return _lokr_enrich_run(metadata)
     run_id = str(metadata.get("run_id") or "")
     process = _LOKR_PROCESSES.get(run_id)
+    log_summary = _lokr_preprocess_log_summary(metadata)
+    if log_summary:
+        metadata.update(log_summary)
+        if (
+            metadata.get("type") == "preprocess"
+            and metadata.get("total_samples")
+            and metadata.get("processed_samples") == metadata.get("total_samples")
+            and int(metadata.get("failed_samples") or 0) == 0
+        ):
+            metadata["returncode"] = 0
+            metadata["status"] = "complete"
+            metadata["completed_at"] = metadata.get("completed_at") or _now_iso()
+            _write_metadata(_lokr_run_path(run_id), metadata)
+            return _lokr_enrich_run(metadata)
     if process is None:
         metadata["status"] = "unknown"
         metadata["message"] = "Run was started by a previous app process. Check the log file for progress."
         _write_metadata(_lokr_run_path(run_id), metadata)
-        return metadata
+        return _lokr_enrich_run(metadata)
     returncode = process.poll()
     if returncode is None:
-        return metadata
+        return _lokr_enrich_run(metadata)
+    _LOKR_PROCESSES.pop(run_id, None)
     metadata["returncode"] = returncode
     metadata["status"] = "complete" if returncode == 0 else "failed"
+    log_path = Path(str(metadata.get("log_path") or ""))
+    if returncode == 0 and log_path.exists():
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        if "No audio files found" in log_text or "Processed: 0/0" in log_text:
+            metadata["status"] = "failed"
+            metadata["message"] = "Side-Step finished without processing any audio. Check dataset paths and run logs."
     metadata["completed_at"] = _now_iso()
     _write_metadata(_lokr_run_path(run_id), metadata)
-    return metadata
+    return _lokr_enrich_run(metadata)
 
 
 def _lokr_runs() -> list[dict[str, Any]]:
     runs = [_refresh_lokr_run(metadata) for metadata in _list_metadata(_lokr_run_root(), "run.json")]
     return sorted(runs, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+
+def _lokr_adapter_weight_path(metadata: dict[str, Any]) -> Path | None:
+    output_dir_raw = str(metadata.get("output_dir") or "")
+    if not output_dir_raw:
+        return None
+    output_dir = Path(output_dir_raw).expanduser()
+    best = output_dir / "best" / "lokr_weights.safetensors"
+    if best.exists():
+        return best
+    checkpoint_root = output_dir / "checkpoints"
+    checkpoints: list[Path] = []
+    if checkpoint_root.exists():
+        checkpoints = [path for path in checkpoint_root.glob("epoch_*/lokr_weights.safetensors") if path.exists()]
+    if checkpoints:
+        def checkpoint_sort_key(path: Path) -> tuple[int, float]:
+            match = re.search(r"epoch_(\d+)", str(path.parent.name))
+            return (int(match.group(1)) if match else -1, path.stat().st_mtime)
+
+        return sorted(checkpoints, key=checkpoint_sort_key, reverse=True)[0]
+    direct = output_dir / "lokr_weights.safetensors"
+    if direct.exists():
+        return direct
+    return None
+
+
+def _lokr_adapter_for_response(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    if metadata.get("type") != "train" or metadata.get("status") != "complete" or metadata.get("adapter_type") != "lokr":
+        return None
+    weight_path = _lokr_adapter_weight_path(metadata)
+    if weight_path is None:
+        return None
+    run_id = str(metadata.get("run_id") or "")
+    label = str(metadata.get("label") or run_id or "LoKr adapter")
+    if label.lower().startswith("train lokr "):
+        label = label[11:].strip() or label
+    model = _lokr_training_model_to_generation_model(str(metadata.get("model") or "turbo"))
+    return {
+        "adapter_id": run_id,
+        "run_id": run_id,
+        "dataset_id": str(metadata.get("dataset_id") or ""),
+        "label": label,
+        "model": model,
+        "training_model": str(metadata.get("model") or ""),
+        "adapter_type": "lokr",
+        "weights_path": str(weight_path),
+        "output_dir": str(metadata.get("output_dir") or ""),
+        "epochs": metadata.get("epochs"),
+        "created_at": metadata.get("created_at"),
+        "completed_at": metadata.get("completed_at"),
+        "metadata_path": metadata.get("metadata_path"),
+    }
+
+
+def _lokr_adapters() -> list[dict[str, Any]]:
+    adapters = []
+    for metadata in _lokr_runs():
+        adapter = _lokr_adapter_for_response(metadata)
+        if adapter is not None:
+            adapters.append(adapter)
+    return sorted(adapters, key=lambda item: str(item.get("completed_at") or item.get("created_at") or ""), reverse=True)
+
+
+def _find_lokr_adapter(adapter_id: str | None) -> dict[str, Any] | None:
+    if not adapter_id:
+        return None
+    return next((adapter for adapter in _lokr_adapters() if adapter.get("adapter_id") == adapter_id), None)
 
 
 def _sidestep_preprocess_command(
@@ -776,16 +1079,16 @@ def _sidestep_preprocess_command(
     tensor_dir: Path,
 ) -> list[str]:
     return [
-        request.sidestep_command,
+        *_sidestep_command_prefix(request.sidestep_command),
         "preprocess",
         "--audio-dir",
-        str(dataset_dir),
+        str(dataset_dir.resolve()),
         "--dataset-json",
-        str(dataset_json),
+        str(dataset_json.resolve()),
         "--output",
-        str(tensor_dir),
+        str(tensor_dir.resolve()),
         "--checkpoint-dir",
-        request.checkpoint_dir,
+        str(Path(request.checkpoint_dir).expanduser().resolve()),
         "--model",
         request.model,
     ]
@@ -793,17 +1096,17 @@ def _sidestep_preprocess_command(
 
 def _sidestep_train_command(request: LokrTrainRequest, *, tensor_dir: Path, output_dir: Path) -> list[str]:
     command = [
-        request.sidestep_command,
+        *_sidestep_command_prefix(request.sidestep_command),
         "--yes",
         "train",
         "--checkpoint-dir",
-        request.checkpoint_dir,
+        str(Path(request.checkpoint_dir).expanduser().resolve()),
         "--model",
         request.model,
         "--dataset-dir",
-        str(tensor_dir),
+        str(tensor_dir.resolve()),
         "--output-dir",
-        str(output_dir),
+        str(output_dir.resolve()),
         "--adapter-type",
         "lokr",
         "--epochs",
@@ -826,6 +1129,17 @@ def _sidestep_train_command(request: LokrTrainRequest, *, tensor_dir: Path, outp
     if request.chunk_duration:
         command.extend(["--chunk-duration", str(request.chunk_duration)])
     return command
+
+
+def _sidestep_command_prefix(command: str) -> list[str]:
+    value = (command or "sidestep").strip()
+    if not value:
+        return ["sidestep"]
+    try:
+        parts = shlex.split(value, posix=os.name != "nt")
+    except ValueError:
+        parts = [value]
+    return parts or ["sidestep"]
 
 
 def _editor_assets() -> list[dict[str, Any]]:
@@ -898,6 +1212,8 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         status["start_api_command"] = build_start_api_command(runtime_config)
         status["simple_setup_command"] = "autotransition runtime setup"
         status["simple_start_command"] = "autotransition runtime start"
+        status["side_step"] = side_step_status(runtime_config).to_dict()
+        status["side_step_command"] = build_side_step_command(runtime_config)
         return status
 
     @app.get("/api/runtime/activity")
@@ -1104,6 +1420,10 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             raise HTTPException(status_code=400, detail="LoKr audio path is outside the dataset root.") from exc
         return get_audio_file(str(audio_path))
 
+    @app.get("/api/lokr/adapters")
+    def list_lokr_adapters() -> list[dict[str, Any]]:
+        return _lokr_adapters()
+
     @app.get("/api/lokr/runs")
     def list_lokr_runs() -> list[dict[str, Any]]:
         return _lokr_runs()
@@ -1115,16 +1435,37 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.get("/api/lokr/runs/{run_id}/logs")
     def get_lokr_run_logs(run_id: str) -> dict[str, str]:
         metadata = _refresh_lokr_run(_read_json_file(_lokr_run_path(run_id), "LoKr run"))
-        log_path = Path(str(metadata.get("log_path") or ""))
-        if not log_path.exists():
+        log_paths = []
+        if metadata.get("type") == "train":
+            session_log = _lokr_train_session_log_path(metadata)
+            if session_log.exists():
+                log_paths.append(("Side-Step session log", session_log))
+        primary_log = Path(str(metadata.get("log_path") or ""))
+        if primary_log.exists() and all(path != primary_log for _, path in log_paths):
+            log_paths.append(("Process log", primary_log))
+        if not log_paths:
             return {"text": ""}
-        return {"text": log_path.read_text(encoding="utf-8", errors="replace")[-20000:]}
+        chunks = []
+        for label, path in log_paths:
+            chunks.append(f"--- {label}: {path} ---\n{path.read_text(encoding='utf-8', errors='replace')[-20000:]}")
+        return {"text": "\n\n".join(chunks)[-30000:]}
+
+    @app.post("/api/lokr/runs/{run_id}/stop")
+    def stop_lokr_run(run_id: str) -> dict[str, Any]:
+        stopped = _stop_lokr_process(run_id)
+        ui_log.add("info", f"Stopped Side-Step run: {run_id}")
+        return {"run": stopped}
 
     @app.post("/api/lokr/datasets/{dataset_id}/preprocess")
     def preprocess_lokr_dataset(dataset_id: str, request: LokrPreprocessRequest) -> dict[str, Any]:
         dataset = _read_lokr_dataset(dataset_id)
         if not dataset.get("samples"):
             raise HTTPException(status_code=400, detail="Dataset has no samples.")
+        if not side_step_status(runtime_config).installed:
+            raise HTTPException(status_code=400, detail="Side-Step runtime is not installed. Run `autotransition runtime setup` or `autotransition runtime setup-sidestep`.")
+        active_run = _active_lokr_run()
+        if active_run is not None:
+            raise HTTPException(status_code=400, detail=f"Side-Step is already running: {active_run.get('label') or active_run.get('run_id')}")
         run_id = f"preprocess-{uuid4().hex[:12]}"
         run_dir = _lokr_run_root() / run_id
         tensor_dir = run_dir / "tensors"
@@ -1140,6 +1481,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             log_path=run_dir / "sidestep-preprocess.log",
             model=request.model,
             tensor_dir=tensor_dir,
+            cwd=runtime_config.side_step_dir,
             extra={"dataset_json": str(dataset_json), "dataset_dir": str(dataset_dir)},
         )
         started = _start_lokr_process(metadata)
@@ -1149,6 +1491,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.post("/api/lokr/datasets/{dataset_id}/train")
     def train_lokr_dataset(dataset_id: str, request: LokrTrainRequest) -> dict[str, Any]:
         dataset = _read_lokr_dataset(dataset_id)
+        if not side_step_status(runtime_config).installed:
+            raise HTTPException(status_code=400, detail="Side-Step runtime is not installed. Run `autotransition runtime setup` or `autotransition runtime setup-sidestep`.")
+        active_run = _active_lokr_run()
+        if active_run is not None:
+            raise HTTPException(status_code=400, detail=f"Side-Step is already running: {active_run.get('label') or active_run.get('run_id')}")
         tensor_dir_value = request.tensor_dir or _lokr_latest_tensor_dir(dataset_id)
         if not tensor_dir_value:
             raise HTTPException(status_code=400, detail="No preprocessed tensor dataset found. Run preprocess first.")
@@ -1169,6 +1516,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             model=request.model,
             tensor_dir=tensor_dir,
             output_dir=output_dir,
+            cwd=runtime_config.side_step_dir,
             extra={
                 "adapter_type": "lokr",
                 "epochs": request.epochs,
@@ -1424,7 +1772,21 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         model = _music_generation_model(request.model)
         vocal_language = (request.vocal_language or "unknown").strip() or "unknown"
         label = request.label.strip() if request.label else prompt[:80]
-        ui_log.add("info", f"Running ACE-Step {model} text-to-music generation.")
+        lokr_adapter = _find_lokr_adapter(request.lokr_adapter_id)
+        if request.lokr_adapter_id and lokr_adapter is None:
+            raise HTTPException(status_code=404, detail=f"LoKr adapter not found: {request.lokr_adapter_id}")
+        if lokr_adapter and lokr_adapter.get("model") != model:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Selected LoKr was trained for {lokr_adapter.get('model')}; choose that model before generating.",
+            )
+        lokr_path = str(lokr_adapter.get("weights_path") or "") if lokr_adapter else None
+        lokr_adapter_name = f"dance_station_{lokr_adapter.get('adapter_id')}" if lokr_adapter else None
+        lokr_label = str(lokr_adapter.get("label") or "") if lokr_adapter else ""
+        if lokr_adapter:
+            ui_log.add("info", f"Running ACE-Step {model} text-to-music generation with LoKr: {lokr_label}.")
+        else:
+            ui_log.add("info", f"Running ACE-Step {model} text-to-music generation.")
         try:
             result = AceStepApiClient(runtime_config).text2music_standalone(
                 prompt=prompt,
@@ -1443,6 +1805,9 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 velocity_norm_threshold=request.velocity_norm_threshold,
                 velocity_ema_factor=request.velocity_ema_factor,
                 seed=request.seed,
+                lokr_path=lokr_path,
+                lokr_scale=request.lokr_scale,
+                lokr_adapter_name=lokr_adapter_name,
             )
         except AceStepApiError as exc:
             ui_log.add("error", str(exc))
@@ -1455,6 +1820,8 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 "prompt": prompt,
                 "model": model,
                 "output_format": request.output_format,
+                "lokr_adapter": lokr_adapter,
+                "lokr_scale": request.lokr_scale if lokr_adapter else None,
                 "metadata_path": str(metadata_path),
                 "settings": request.model_dump(),
             }
@@ -1470,6 +1837,8 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             "prompt": prompt,
             "model": model,
             "output_format": request.output_format,
+            "lokr_adapter": lokr_adapter,
+            "lokr_scale": request.lokr_scale if lokr_adapter else None,
             "generated_audio_path": str(result.output_path),
             "generated_metadata_path": str(result.metadata_path),
             "metadata_path": str(metadata_path),
@@ -2184,6 +2553,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.get("/api/logs")
     def get_logs() -> list[dict[str, str]]:
+        return ui_log.entries()
+
+    @app.delete("/api/logs")
+    def clear_logs() -> list[dict[str, str]]:
+        ui_log.clear()
         return ui_log.entries()
 
     return app

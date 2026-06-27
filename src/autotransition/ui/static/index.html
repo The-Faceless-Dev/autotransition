@@ -275,6 +275,16 @@
             </select>
           </label>
           <label class="field">
+            <span>LoKr adapter</span>
+            <select id="musicLokrAdapterSelect">
+              <option value="">No LoKr</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>LoKr strength</span>
+            <input id="musicLokrScale" type="number" min="0" max="1" step="0.05" value="1" />
+          </label>
+          <label class="field">
             <span>Output format</span>
             <select id="musicOutputFormat">
               <option value="flac">FLAC</option>
@@ -661,7 +671,7 @@
           </div>
           <label class="field">
             <span>Side-Step command</span>
-            <input id="lokrSidestepCommand" type="text" value="sidestep" />
+            <input id="lokrSidestepCommand" type="text" value="uv run sidestep" />
           </label>
           <label class="field">
             <span>Checkpoint dir</span>
@@ -674,9 +684,14 @@
           <div class="button-row">
             <button id="preprocessLokrButton" class="secondary-button" type="button">Preprocess Dataset</button>
             <button id="trainLokrButton" class="primary-button" type="button">Start LoKr Training</button>
+            <button id="stopLokrRunButton" class="secondary-button" type="button" disabled>Stop Current Run</button>
           </div>
+          <div id="lokrTrainingReadiness" class="summary">Select a dataset and preprocess it before training.</div>
           <div id="lokrRunList" class="generated-list">
             <div class="empty-result">No Side-Step runs yet.</div>
+          </div>
+          <div class="button-row">
+            <button id="clearLokrLogButton" class="secondary-button" type="button">Clear Log View</button>
           </div>
           <div id="lokrRunLog" class="activity-readout">Select a run to view logs.</div>
         </section>

@@ -13,7 +13,9 @@ const state = {
   lokrDatasets: [],
   activeLokrDatasetId: null,
   lokrRuns: [],
+  lokrAdapters: [],
   selectedLokrRunId: null,
+  lokrRunViewClearedAt: Number(window.localStorage.getItem("danceStationLokrRunViewClearedAt") || 0),
   instrumentClips: [],
   instrumentBank: [],
   instrumentTracks: [
@@ -158,6 +160,8 @@ const el = {
   musicLyrics: document.querySelector("#musicLyrics"),
   musicLabelInput: document.querySelector("#musicLabelInput"),
   musicModelSelect: document.querySelector("#musicModelSelect"),
+  musicLokrAdapterSelect: document.querySelector("#musicLokrAdapterSelect"),
+  musicLokrScale: document.querySelector("#musicLokrScale"),
   musicOutputFormat: document.querySelector("#musicOutputFormat"),
   musicDuration: document.querySelector("#musicDuration"),
   musicSeed: document.querySelector("#musicSeed"),
@@ -199,6 +203,7 @@ const el = {
   lokrValidationState: document.querySelector("#lokrValidationState"),
   lokrDatasetSummary: document.querySelector("#lokrDatasetSummary"),
   lokrRunState: document.querySelector("#lokrRunState"),
+  lokrTrainingReadiness: document.querySelector("#lokrTrainingReadiness"),
   lokrTrainModel: document.querySelector("#lokrTrainModel"),
   lokrTrainEpochs: document.querySelector("#lokrTrainEpochs"),
   lokrTrainSaveEvery: document.querySelector("#lokrTrainSaveEvery"),
@@ -214,6 +219,8 @@ const el = {
   lokrOffloadEncoder: document.querySelector("#lokrOffloadEncoder"),
   preprocessLokrButton: document.querySelector("#preprocessLokrButton"),
   trainLokrButton: document.querySelector("#trainLokrButton"),
+  stopLokrRunButton: document.querySelector("#stopLokrRunButton"),
+  clearLokrLogButton: document.querySelector("#clearLokrLogButton"),
   lokrRunList: document.querySelector("#lokrRunList"),
   lokrRunLog: document.querySelector("#lokrRunLog"),
   instrumentLabState: document.querySelector("#instrumentLabState"),
@@ -432,9 +439,13 @@ function renderRuntime(runtime) {
     `API: ${runtime.api_url}`,
     `uv: ${runtime.uv_available ? "available" : "missing"}`,
     `git: ${runtime.git_available ? "available" : "missing"}`,
+    `Side-Step: ${runtime.side_step ? runtime.side_step.message : "Not checked"}`,
     `Setup: ${runtime.simple_setup_command}`,
     `Start: ${runtime.simple_start_command}`,
   ].join("<br>");
+  if (runtime.side_step_command) {
+    el.lokrSidestepCommand.value = runtime.side_step_command;
+  }
   el.copyRuntimeCommandButton.dataset.command = `${runtime.simple_setup_command}\n${runtime.simple_start_command}`;
 }
 
@@ -581,6 +592,7 @@ function setActiveLokrDataset(dataset) {
   state.activeLokrDatasetId = dataset.metadata.dataset_id;
   renderLokrDatasets();
   renderLokrDatasetEditor();
+  renderLokrRuns();
 }
 
 function renderLokrDatasets() {
@@ -872,7 +884,7 @@ async function deleteLokrEntry(entryId) {
 function lokrRunPayload() {
   return {
     model: el.lokrTrainModel.value,
-    sidestep_command: el.lokrSidestepCommand.value.trim() || "sidestep",
+    sidestep_command: el.lokrSidestepCommand.value.trim() || "uv run sidestep",
     checkpoint_dir: el.lokrCheckpointDir.value.trim() || "runtimes/ACE-Step-1.5/checkpoints",
   };
 }
@@ -893,48 +905,184 @@ function lokrTrainingPayload() {
   };
 }
 
+function latestLokrPreprocessRun(datasetId) {
+  return state.lokrRuns.find((run) => run.dataset_id === datasetId && run.type === "preprocess" && run.status === "complete" && run.ready_to_train);
+}
+
+function isLokrRunVisible(run) {
+  if (!state.lokrRunViewClearedAt) return true;
+  if (run.status === "running") return true;
+  const createdAt = Date.parse(run.created_at || "");
+  if (!Number.isFinite(createdAt)) return true;
+  return createdAt >= state.lokrRunViewClearedAt;
+}
+
+function visibleLokrRuns() {
+  return state.lokrRuns.filter(isLokrRunVisible);
+}
+
+function activeLokrRun() {
+  return state.lokrRuns.find((run) => run.status === "running") || null;
+}
+
+function lokrProgressDetails(run) {
+  const details = [];
+  if (run.current_epoch !== undefined && run.current_epoch !== null) {
+    details.push(`Epoch ${run.current_epoch}${run.max_epochs ? `/${run.max_epochs}` : ""}`);
+  }
+  if (run.current_step !== undefined && run.current_step !== null) {
+    details.push(`Step ${run.current_step}`);
+  }
+  if (run.loss !== undefined && run.loss !== null) {
+    const loss = Number(run.loss);
+    details.push(Number.isFinite(loss) ? `Loss ${loss.toFixed(4)}` : `Loss ${run.loss}`);
+  }
+  return details;
+}
+
+function renderLokrTrainingReadiness() {
+  const dataset = activeLokrDataset();
+  const activeRun = activeLokrRun();
+  el.preprocessLokrButton.disabled = Boolean(activeRun) || !dataset;
+  el.stopLokrRunButton.disabled = !activeRun;
+  if (!dataset) {
+    el.lokrTrainingReadiness.textContent = "Select a dataset and preprocess it before training.";
+    el.trainLokrButton.disabled = true;
+    return;
+  }
+  if (activeRun) {
+    const details = lokrProgressDetails(activeRun);
+    const progress = details.length ? ` ${details.join(" | ")}.` : activeRun.summary ? ` ${activeRun.summary}.` : "";
+    el.lokrTrainingReadiness.textContent = `${activeRun.label || activeRun.run_id} is running.${progress}`;
+    el.trainLokrButton.disabled = true;
+    return;
+  }
+  const datasetId = dataset.metadata.dataset_id;
+  const runningPreprocess = state.lokrRuns.find((run) => run.dataset_id === datasetId && run.type === "preprocess" && run.status === "running");
+  if (runningPreprocess) {
+    const summary = runningPreprocess.summary ? ` ${runningPreprocess.summary}.` : "";
+    el.lokrTrainingReadiness.textContent = `Preprocessing is running.${summary} Training will unlock when tensors are ready.`;
+    el.trainLokrButton.disabled = true;
+    return;
+  }
+  const readyRun = latestLokrPreprocessRun(datasetId);
+  if (readyRun) {
+    const summary = readyRun.summary || "Preprocess complete";
+    el.lokrTrainingReadiness.textContent = `${summary}. Ready to train with tensors at ${readyRun.tensor_dir}.`;
+    el.trainLokrButton.disabled = false;
+    return;
+  }
+  const failedPreprocess = visibleLokrRuns().find((run) => run.dataset_id === datasetId && run.type === "preprocess" && run.status === "failed");
+  if (failedPreprocess) {
+    el.lokrTrainingReadiness.textContent = failedPreprocess.message || "Latest preprocess failed. View the run log, fix the dataset, then preprocess again.";
+    el.trainLokrButton.disabled = true;
+    return;
+  }
+  el.lokrTrainingReadiness.textContent = "Run preprocess to build the tensor dataset required for Side-Step training.";
+  el.trainLokrButton.disabled = true;
+}
+
 function renderLokrRuns() {
   el.lokrRunList.replaceChildren();
-  const running = state.lokrRuns.filter((run) => run.status === "running").length;
-  setPill(el.lokrRunState, running ? `${running} running` : `${state.lokrRuns.length} runs`, running ? "warn" : state.lokrRuns.length ? "ok" : "neutral");
-  if (!state.lokrRuns.length) {
+  const activeRun = activeLokrRun();
+  const runs = visibleLokrRuns();
+  const running = runs.filter((run) => run.status === "running").length;
+  const ready = activeLokrDataset() ? latestLokrPreprocessRun(activeLokrDataset().metadata.dataset_id) : null;
+  setPill(el.lokrRunState, activeRun ? "Running" : ready ? "Ready to train" : running ? `${running} running` : `${runs.length} runs`, activeRun ? "warn" : ready ? "ok" : running ? "warn" : runs.length ? "ok" : "neutral");
+  renderLokrTrainingReadiness();
+  if (!runs.length) {
     const empty = document.createElement("div");
     empty.className = "empty-result";
-    empty.textContent = "No Side-Step runs yet.";
+    empty.textContent = state.lokrRunViewClearedAt ? "Run view cleared. New Side-Step runs will appear here." : "No Side-Step runs yet.";
     el.lokrRunList.appendChild(empty);
     return;
   }
-  state.lokrRuns.slice(0, 12).forEach((run) => {
+  runs.slice(0, 12).forEach((run) => {
     const item = document.createElement("article");
     item.className = `generated-item lokr-run-item${run.run_id === state.selectedLokrRunId ? " active" : ""}`;
+    const progress = lokrProgressDetails(run);
     item.innerHTML = `
       <div class="generated-title">
         <strong>${escapeHtml(run.label || run.run_id)}</strong>
         <span>${escapeHtml(run.status || "unknown")}</span>
       </div>
+      ${progress.length ? `<div class="summary">${escapeHtml(progress.join(" | "))}</div>` : ""}
+      ${run.summary ? `<div class="summary">${escapeHtml(run.summary)}${run.ready_to_train ? ". Ready to train." : ""}</div>` : ""}
+      ${run.message ? `<div class="activity-readout"><strong>Message</strong><br>${escapeHtml(run.message)}</div>` : ""}
       <div class="asset-path">${escapeHtml((run.command || []).join(" "))}</div>
       <div class="button-row generated-actions">
         <button class="secondary-button lokr-view-log-button" type="button">View Log</button>
+        ${run.status === "running" ? `<button class="secondary-button lokr-stop-run-button" type="button">Stop</button>` : ""}
       </div>
     `;
     item.querySelector(".lokr-view-log-button").addEventListener("click", () => loadLokrRunLog(run.run_id));
+    const stopButton = item.querySelector(".lokr-stop-run-button");
+    if (stopButton) stopButton.addEventListener("click", () => stopLokrRun(run.run_id));
     el.lokrRunList.appendChild(item);
   });
 }
 
 async function refreshLokrRuns() {
-  state.lokrRuns = await api("/api/lokr/runs");
+  const [runs, adapters] = await Promise.all([api("/api/lokr/runs"), api("/api/lokr/adapters")]);
+  state.lokrRuns = runs;
+  state.lokrAdapters = adapters;
   renderLokrRuns();
+  renderMusicLokrAdapters();
 }
 
 async function loadLokrRunLog(runId) {
   state.selectedLokrRunId = runId;
   const response = await api(`/api/lokr/runs/${encodeURIComponent(runId)}/logs`);
-  el.lokrRunLog.textContent = response.text || "No log output yet.";
+  const run = state.lokrRuns.find((item) => item.run_id === runId);
+  el.lokrRunLog.textContent = response.text || (run && run.message ? run.message : "No log output yet.");
   renderLokrRuns();
 }
 
+async function refreshSelectedLokrRunLog() {
+  if (!state.selectedLokrRunId) return;
+  const run = state.lokrRuns.find((item) => item.run_id === state.selectedLokrRunId);
+  if (!run || run.status !== "running") return;
+  const response = await api(`/api/lokr/runs/${encodeURIComponent(run.run_id)}/logs`);
+  el.lokrRunLog.textContent = response.text || run.message || "No log output yet.";
+}
+
+async function stopLokrRun(runId = null) {
+  const run = runId ? state.lokrRuns.find((item) => item.run_id === runId) : activeLokrRun();
+  if (!run) {
+    showToast("No running Side-Step run to stop");
+    return;
+  }
+  el.stopLokrRunButton.disabled = true;
+  try {
+    const response = await api(`/api/lokr/runs/${encodeURIComponent(run.run_id)}/stop`, { method: "POST" });
+    state.lokrRuns = state.lokrRuns.map((item) => item.run_id === response.run.run_id ? response.run : item);
+    state.selectedLokrRunId = response.run.run_id;
+    renderLokrRuns();
+    await loadLokrRunLog(response.run.run_id);
+    showToast(response.run.message || "Side-Step run stopped");
+  } catch (error) {
+    showToast(error.message || "Could not stop Side-Step run");
+  } finally {
+    renderLokrRuns();
+  }
+}
+
+async function clearLokrLogView() {
+  state.selectedLokrRunId = null;
+  state.lokrRunViewClearedAt = Date.now();
+  window.localStorage.setItem("danceStationLokrRunViewClearedAt", String(state.lokrRunViewClearedAt));
+  el.lokrRunLog.textContent = "Select a run to view logs.";
+  const logs = await api("/api/logs", { method: "DELETE" });
+  renderLogs(logs);
+  renderLokrRuns();
+  showToast("Log view cleared");
+}
+
 async function preprocessLokrDataset() {
+  if (activeLokrRun()) {
+    showToast("Stop the current Side-Step run before starting another");
+    return;
+  }
   const dataset = activeLokrDataset();
   if (!dataset) {
     showToast("Select a LoKr dataset first");
@@ -951,10 +1099,16 @@ async function preprocessLokrDataset() {
   });
   state.lokrRuns.unshift(response.run);
   renderLokrRuns();
-  showToast("Side-Step preprocess started");
+  state.selectedLokrRunId = response.run.run_id;
+  await loadLokrRunLog(response.run.run_id);
+  showToast(response.run.status === "failed" ? response.run.message || "Side-Step preprocess failed to start" : "Side-Step preprocess started");
 }
 
 async function trainLokrDataset() {
+  if (activeLokrRun()) {
+    showToast("Stop the current Side-Step run before starting another");
+    return;
+  }
   const dataset = activeLokrDataset();
   if (!dataset) {
     showToast("Select a LoKr dataset first");
@@ -966,7 +1120,9 @@ async function trainLokrDataset() {
   });
   state.lokrRuns.unshift(response.run);
   renderLokrRuns();
-  showToast("Side-Step LoKr training started");
+  state.selectedLokrRunId = response.run.run_id;
+  await loadLokrRunLog(response.run.run_id);
+  showToast(response.run.status === "failed" ? response.run.message || "Side-Step training failed to start" : "Side-Step LoKr training started");
 }
 
 async function loadExistingCreationAsTransitionSource() {
@@ -1354,6 +1510,8 @@ function renderMusicList() {
     const row = document.createElement("article");
     row.className = "generated-item";
     const outputPath = item.generated_audio_path || "";
+    const adapter = item.lokr_adapter || null;
+    const adapterLabel = adapter ? `${adapter.label || adapter.adapter_id || "LoKr"} (${adapter.model || "model"})` : "None";
     const audio = outputPath
       ? `<audio controls preload="metadata" src="/api/music-generations/audio?path=${encodeURIComponent(outputPath)}"></audio>`
       : `<div class="empty-result">No playable audio for this generation.</div>`;
@@ -1366,6 +1524,7 @@ function renderMusicList() {
       <dl class="path-list">
         <dt>Message</dt><dd>${escapeHtml(item.message || "")}</dd>
         <dt>Model</dt><dd>${escapeHtml(item.model || "")}</dd>
+        <dt>LoKr</dt><dd>${escapeHtml(adapterLabel)}</dd>
         <dt>Prompt</dt><dd>${escapeHtml(item.prompt || "")}</dd>
         <dt>Output</dt><dd>${escapeHtml(outputPath || "None")}</dd>
         <dt>Metadata</dt><dd>${escapeHtml(item.metadata_path || "")}</dd>
@@ -1373,6 +1532,25 @@ function renderMusicList() {
     `;
     el.musicList.appendChild(row);
   });
+}
+
+function renderMusicLokrAdapters() {
+  if (!el.musicLokrAdapterSelect) return;
+  const current = el.musicLokrAdapterSelect.value;
+  el.musicLokrAdapterSelect.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No LoKr";
+  el.musicLokrAdapterSelect.appendChild(none);
+  state.lokrAdapters.forEach((adapter) => {
+    const option = document.createElement("option");
+    option.value = adapter.adapter_id;
+    option.textContent = `${adapter.label || adapter.adapter_id} - ${adapter.model || "model"}`;
+    el.musicLokrAdapterSelect.appendChild(option);
+  });
+  if (current && state.lokrAdapters.some((adapter) => adapter.adapter_id === current)) {
+    el.musicLokrAdapterSelect.value = current;
+  }
 }
 
 async function renameExtraction(extractionId, row) {
@@ -2653,7 +2831,7 @@ function addGeneratedResult(result, plan) {
 
 async function loadAll() {
   await loadInstrumentBank();
-  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, lokrRuns, instrumentClips, editorAssets, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, lokrRuns, lokrAdapters, instrumentClips, editorAssets, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
@@ -2663,6 +2841,7 @@ async function loadAll() {
     api("/api/music-generations"),
     api("/api/lokr/datasets"),
     api("/api/lokr/runs"),
+    api("/api/lokr/adapters"),
     api("/api/instrument-lab/clips"),
     api("/api/editor/assets"),
     api("/api/logs"),
@@ -2674,6 +2853,7 @@ async function loadAll() {
   state.musicResults = musicGenerations;
   state.lokrDatasets = lokrDatasets;
   state.lokrRuns = lokrRuns;
+  state.lokrAdapters = lokrAdapters;
   state.instrumentClips = instrumentClips;
   state.editorAssets = editorAssets;
   renderStatus(status);
@@ -2684,6 +2864,7 @@ async function loadAll() {
   renderExtractionList();
   applyMusicModelDefaults();
   syncMusicVocalControls();
+  renderMusicLokrAdapters();
   renderMusicList();
   renderLokrDatasets();
   renderLokrDatasetEditor();
@@ -2947,6 +3128,8 @@ async function runMusicGeneration() {
       body: JSON.stringify({
         prompt,
         model: el.musicModelSelect.value,
+        lokr_adapter_id: el.musicLokrAdapterSelect.value || null,
+        lokr_scale: numericValue(el.musicLokrScale) ?? 1,
         label: el.musicLabelInput.value.trim() || null,
         instrumental: el.musicInstrumental.checked,
         lyrics: el.musicLyrics.value.trim() || null,
@@ -3132,6 +3315,12 @@ el.preprocessLokrButton.addEventListener("click", () => {
 el.trainLokrButton.addEventListener("click", () => {
   trainLokrDataset().catch((error) => showToast(error.message));
 });
+el.stopLokrRunButton.addEventListener("click", () => {
+  stopLokrRun().catch((error) => showToast(error.message));
+});
+el.clearLokrLogButton.addEventListener("click", () => {
+  clearLokrLogView().catch((error) => showToast(error.message));
+});
 el.lokrDropZone.addEventListener("dragover", (event) => {
   event.preventDefault();
   el.lokrDropZone.classList.add("active");
@@ -3250,3 +3439,9 @@ loadAll().catch((error) => {
 });
 
 window.setInterval(refreshLogs, 5000);
+window.setInterval(() => {
+  if (!state.lokrRuns.some((run) => run.status === "running")) return;
+  refreshLokrRuns()
+    .then(refreshSelectedLokrRunLog)
+    .catch((error) => console.warn("[Dance Station] LoKr run refresh failed", error));
+}, 3000);

@@ -22,6 +22,7 @@ from autotransition.runtime.ace_step import (
     stop_runtime_process_tree,
 )
 import autotransition.runtime.ace_step as ace_step_runtime
+from autotransition.runtime.side_step import build_side_step_command, build_side_step_install_commands, side_step_status
 
 
 def test_runtime_install_commands_target_runtime_folder(tmp_path: Path) -> None:
@@ -32,6 +33,30 @@ def test_runtime_install_commands_target_runtime_folder(tmp_path: Path) -> None:
     assert "uv/install.ps1" in commands[0]
     assert f"git clone https://github.com/ACE-Step/ACE-Step-1.5.git {config.ace_step_dir}" == commands[1]
     assert commands[-1] == "uv sync"
+
+
+def test_side_step_install_commands_target_runtime_folder(tmp_path: Path) -> None:
+    config = RuntimeConfig(side_step_dir=tmp_path / "Side-Step")
+
+    commands = build_side_step_install_commands(config)
+
+    assert "uv/install.ps1" in commands[0]
+    assert f"git clone https://github.com/koda-dernet/Side-Step.git {config.side_step_dir}" == commands[1]
+    assert commands[-1] == "uv sync"
+    assert build_side_step_command(config) == "uv run sidestep"
+
+
+def test_side_step_status_reports_install(tmp_path: Path, monkeypatch) -> None:
+    side_step_dir = tmp_path / "Side-Step"
+    side_step_dir.mkdir()
+    (side_step_dir / "pyproject.toml").write_text("[project]\nname='side-step'\n", encoding="utf-8")
+    monkeypatch.setattr("autotransition.runtime.side_step.resolve_uv_executable", lambda: Path("uv"))
+
+    status = side_step_status(RuntimeConfig(side_step_dir=side_step_dir))
+
+    assert status.installed
+    assert status.uv_available
+    assert "installed" in status.message
 
 
 def test_uv_install_command_uses_shell_script_on_posix(monkeypatch) -> None:

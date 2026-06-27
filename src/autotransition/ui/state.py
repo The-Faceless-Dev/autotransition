@@ -40,6 +40,9 @@ class UiLog:
     def entries(self) -> list[dict[str, str]]:
         return [entry.to_dict() for entry in self._entries]
 
+    def clear(self) -> None:
+        self._entries.clear()
+
 
 def system_status(models_dir: Path = Path("models")) -> dict[str, object]:
     ffmpeg_path = resolve_ffmpeg()
