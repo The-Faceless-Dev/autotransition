@@ -101,6 +101,80 @@ def test_ui_local_library_reindexes_existing_creations(tmp_path: Path, monkeypat
     assert Path(tmp_path / "data" / "library" / "items" / "music-1" / "manifest.json").exists()
 
 
+def test_ui_local_library_reindexes_lokr_datasets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    dataset_dir = tmp_path / "data" / "lokr-training" / "datasets" / "lokr-data-1"
+    dataset_dir.mkdir(parents=True)
+    (dataset_dir / "dataset.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "dataset_id": "lokr-data-1",
+                    "label": "Artist dataset",
+                    "custom_tag": "artist_token",
+                    "default_genre": "funk pop",
+                    "default_language": "en",
+                    "all_instrumental": False,
+                    "created_at": "2026-06-27T12:00:00+00:00",
+                    "updated_at": "2026-06-27T12:05:00+00:00",
+                },
+                "samples": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.post("/api/library/local/reindex")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["id"] == "lokr-data-1"
+    assert item["kind"] == "dataset"
+    assert item["title"] == "Artist dataset"
+    assert item["files"][0]["role"] == "dataset_manifest"
+    assert item["metadata"]["custom_tag"] == "artist_token"
+    assert Path(tmp_path / "data" / "library" / "items" / "lokr-data-1" / "manifest.json").exists()
+
+
+def test_ui_local_library_reindexes_lokr_adapters(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "lokr-training" / "runs" / "train-a"
+    weights = run_dir / "adapter" / "best" / "lokr_weights.safetensors"
+    weights.parent.mkdir(parents=True)
+    weights.write_bytes(b"weights")
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "train-a",
+                "type": "train",
+                "status": "complete",
+                "adapter_type": "lokr",
+                "label": "Artist LoKr",
+                "dataset_id": "lokr-data-1",
+                "model": "turbo",
+                "epochs": 12,
+                "output_dir": str(run_dir / "adapter"),
+                "created_at": "2026-06-27T12:00:00+00:00",
+                "completed_at": "2026-06-27T12:30:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.post("/api/library/local/reindex")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["id"] == "train-a"
+    assert item["kind"] == "lokr"
+    assert item["title"] == "Artist LoKr"
+    assert item["files"][0]["role"] == "adapter_weights"
+    assert item["metadata"]["dataset_id"] == "lokr-data-1"
+    assert item["source_lineage"]["dataset_id"] == "lokr-data-1"
+
+
 def test_ui_serves_instrument_bank_manifest(tmp_path: Path) -> None:
     client = TestClient(create_app(models_dir=tmp_path))
 

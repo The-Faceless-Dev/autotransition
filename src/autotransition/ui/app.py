@@ -29,7 +29,7 @@ from autotransition.audio.formats import DEFAULT_SCAFFOLD_FORMAT, SUPPORTED_INPU
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.generation import GenerationResult, GenerationStatus
 from autotransition.library.index import LocalLibraryIndex
-from autotransition.library.schema import LibraryItem
+from autotransition.library.schema import LibraryFile, LibraryItem, library_item_from_editor_asset
 from autotransition.models import (
     AceStepRepaintAdapter,
     AceStepRuntimeError,
@@ -1197,6 +1197,107 @@ def _library_item_response(item: LibraryItem) -> dict[str, Any]:
     return item.dict()
 
 
+def _library_items_from_lokr_datasets() -> list[LibraryItem]:
+    items: list[LibraryItem] = []
+    for metadata_path in _lokr_dataset_root().glob("*/dataset.json"):
+        try:
+            dataset = _lokr_dataset_for_response(_read_lokr_dataset(metadata_path.parent.name))
+        except Exception:
+            continue
+        metadata = dataset.get("metadata") or {}
+        dataset_id = str(metadata.get("dataset_id") or "")
+        metadata_path = Path(str(dataset.get("metadata_path") or ""))
+        if not dataset_id or not metadata_path.exists():
+            continue
+        items.append(
+            LibraryItem(
+                id=dataset_id,
+                visibility="local",
+                status="draft",
+                kind="dataset",
+                title=str(metadata.get("label") or dataset_id),
+                files=[
+                    LibraryFile(
+                        role="dataset_manifest",
+                        mime_type="application/json",
+                        size_bytes=metadata_path.stat().st_size,
+                        path=str(metadata_path),
+                    )
+                ],
+                metadata={
+                    "category": "dataset",
+                    "metadata_path": str(metadata_path),
+                    "sample_count": metadata.get("num_samples", 0),
+                    "custom_tag": metadata.get("custom_tag") or "",
+                    "default_genre": metadata.get("default_genre") or "",
+                    "default_language": metadata.get("default_language") or "unknown",
+                    "all_instrumental": bool(metadata.get("all_instrumental", True)),
+                },
+                created_at=str(metadata.get("created_at") or ""),
+                updated_at=str(metadata.get("updated_at") or metadata.get("created_at") or ""),
+            )
+        )
+    return items
+
+
+def _library_items_from_lokr_adapters() -> list[LibraryItem]:
+    items: list[LibraryItem] = []
+    for adapter in _lokr_adapters():
+        adapter_id = str(adapter.get("adapter_id") or "")
+        weights_path = Path(str(adapter.get("weights_path") or ""))
+        if not adapter_id or not weights_path.exists():
+            continue
+        metadata_path = str(adapter.get("metadata_path") or "")
+        files = [
+            LibraryFile(
+                role="adapter_weights",
+                mime_type="application/octet-stream",
+                size_bytes=weights_path.stat().st_size,
+                path=str(weights_path),
+            )
+        ]
+        if metadata_path and Path(metadata_path).exists():
+            files.append(
+                LibraryFile(
+                    role="metadata",
+                    mime_type="application/json",
+                    size_bytes=Path(metadata_path).stat().st_size,
+                    path=metadata_path,
+                )
+            )
+        items.append(
+            LibraryItem(
+                id=adapter_id,
+                visibility="local",
+                status="draft",
+                kind="lokr",
+                title=str(adapter.get("label") or adapter_id),
+                files=files,
+                metadata={
+                    "category": "lokr",
+                    "adapter_type": adapter.get("adapter_type") or "lokr",
+                    "model": adapter.get("model") or "",
+                    "training_model": adapter.get("training_model") or "",
+                    "dataset_id": adapter.get("dataset_id") or "",
+                    "epochs": adapter.get("epochs"),
+                    "metadata_path": metadata_path,
+                    "output_dir": adapter.get("output_dir") or "",
+                },
+                source_lineage={"dataset_id": adapter.get("dataset_id") or ""},
+                created_at=str(adapter.get("created_at") or ""),
+                updated_at=str(adapter.get("completed_at") or adapter.get("created_at") or ""),
+            )
+        )
+    return items
+
+
+def _local_library_scanned_items() -> list[LibraryItem]:
+    items = [item for asset in _editor_assets() if (item := library_item_from_editor_asset(asset)) is not None]
+    items.extend(_library_items_from_lokr_datasets())
+    items.extend(_library_items_from_lokr_adapters())
+    return items
+
+
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
     runtime_config = runtime_config or RuntimeConfig()
     app = FastAPI(title="Dance Station", version="0.1.0")
@@ -1319,7 +1420,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.post("/api/library/local/reindex")
     def reindex_local_library() -> dict[str, object]:
         library = _local_library()
-        items = [_library_item_response(item) for item in library.reindex_from_editor_assets(_editor_assets())]
+        items = [_library_item_response(item) for item in library.reindex_items(_local_library_scanned_items())]
         ui_log.add("info", f"Reindexed local library: {len(items)} items")
         return {"items": items, "count": len(items), "index_path": str(library.index_path)}
 

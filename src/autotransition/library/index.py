@@ -38,14 +38,14 @@ class LocalLibraryIndex:
         return item
 
     def reindex_from_editor_assets(self, assets: Iterable[dict[str, Any]]) -> list[LibraryItem]:
+        return self.reindex_items(item for asset in assets if (item := library_item_from_editor_asset(asset)) is not None)
+
+    def reindex_items(self, scanned_items: Iterable[LibraryItem]) -> list[LibraryItem]:
         self.root.mkdir(parents=True, exist_ok=True)
         self.items_dir.mkdir(parents=True, exist_ok=True)
 
         item_ids: list[str] = []
-        for asset in assets:
-            scanned = library_item_from_editor_asset(asset)
-            if scanned is None:
-                continue
+        for scanned in scanned_items:
             existing = self.read_item(scanned.id)
             item = _merge_reindexed_item(existing, scanned)
             self.write_item(item)
