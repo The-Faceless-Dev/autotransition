@@ -26,6 +26,7 @@
       <button id="lokrTrainingTabButton" class="tab-button" type="button">LoKr Training</button>
       <button id="instrumentLabTabButton" class="tab-button" type="button">Instrument Lab</button>
       <button id="audioEditTabButton" class="tab-button" type="button">Audio Editor</button>
+      <button id="libraryTabButton" class="tab-button" type="button">Library</button>
     </nav>
 
     <main id="transitionPage" class="workspace app-page active">
@@ -898,6 +899,64 @@
           <button id="saveEditButton" class="primary-button" type="button">Save Edit</button>
         </div>
       </section>
+    </main>
+
+    <main id="libraryPage" class="workspace app-page library-page">
+      <section class="panel library-browser-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Local Library</h2>
+            <div id="libraryIndexPath" class="editor-subtitle">Index not loaded</div>
+          </div>
+          <span id="libraryState" class="mini-state">Loading</span>
+        </div>
+
+        <div class="control-grid editor-filter-grid">
+          <label class="field">
+            <span>Search</span>
+            <input id="librarySearch" type="text" placeholder="title, kind, tag, path" />
+          </label>
+          <label class="field">
+            <span>Kind</span>
+            <select id="libraryKindFilter">
+              <option value="all">All</option>
+              <option value="generation">Generations</option>
+              <option value="transition">Transitions</option>
+              <option value="extraction">Extractions</option>
+              <option value="merge">Merges</option>
+              <option value="edit">Edits</option>
+              <option value="instrument">Instrument Clips</option>
+              <option value="instrumenttrack">Instrument Tracks</option>
+              <option value="dataset">Datasets</option>
+              <option value="lokr">LoKr Adapters</option>
+            </select>
+          </label>
+          <div class="field button-field">
+            <span>Index</span>
+            <button id="reindexLibraryButton" class="primary-button" type="button">Reindex Creations</button>
+          </div>
+          <div class="field button-field">
+            <span>View</span>
+            <button id="refreshLibraryButton" class="secondary-button" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div id="libraryList" class="library-list">
+          <div class="empty-result">No local library items yet.</div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Library Status</h2>
+            <span id="libraryDetailState" class="mini-state">Local</span>
+          </div>
+          <div id="librarySummary" class="summary">
+            The local library indexes saved Dance Station creations without copying media files. Public sync is a later step.
+          </div>
+        </section>
+      </aside>
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

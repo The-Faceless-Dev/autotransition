@@ -28,6 +28,8 @@ from autotransition.audio import (
 from autotransition.audio.formats import DEFAULT_SCAFFOLD_FORMAT, SUPPORTED_INPUT_FORMATS, validate_supported_source
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.generation import GenerationResult, GenerationStatus
+from autotransition.library.index import LocalLibraryIndex
+from autotransition.library.schema import LibraryItem
 from autotransition.models import (
     AceStepRepaintAdapter,
     AceStepRuntimeError,
@@ -159,6 +161,14 @@ class BaseGenerationTestRequest(BaseModel):
 
 class ExtractionRenameRequest(BaseModel):
     label: str = Field(..., min_length=1, max_length=120)
+
+
+class LocalLibraryUpdateRequest(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=160)
+    description: str | None = Field(None, max_length=3000)
+    tags: list[str] = Field(default_factory=list)
+    license: str | None = Field(None, max_length=160)
+    attribution: str | None = Field(None, max_length=1000)
 
 
 class ExtractionMergeRequest(BaseModel):
@@ -1177,6 +1187,16 @@ def _editor_assets() -> list[dict[str, Any]]:
     return sorted(assets, key=lambda item: str(item.get("created_at") or ""), reverse=True)
 
 
+def _local_library() -> LocalLibraryIndex:
+    return LocalLibraryIndex(Path("data/library"))
+
+
+def _library_item_response(item: LibraryItem) -> dict[str, Any]:
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    return item.dict()
+
+
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
     runtime_config = runtime_config or RuntimeConfig()
     app = FastAPI(title="Dance Station", version="0.1.0")
@@ -1289,6 +1309,29 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.get("/api/editor/audio")
     def get_editor_audio(path: str = Query(..., min_length=1)) -> FileResponse:
         return get_audio_file(path)
+
+    @app.get("/api/library/local")
+    def list_local_library() -> dict[str, object]:
+        library = _local_library()
+        items = [_library_item_response(item) for item in library.list_items()]
+        return {"items": items, "count": len(items), "index_path": str(library.index_path)}
+
+    @app.post("/api/library/local/reindex")
+    def reindex_local_library() -> dict[str, object]:
+        library = _local_library()
+        items = [_library_item_response(item) for item in library.reindex_from_editor_assets(_editor_assets())]
+        ui_log.add("info", f"Reindexed local library: {len(items)} items")
+        return {"items": items, "count": len(items), "index_path": str(library.index_path)}
+
+    @app.patch("/api/library/local/{item_id}")
+    def update_local_library_item(item_id: str, request: LocalLibraryUpdateRequest) -> dict[str, object]:
+        library = _local_library()
+        try:
+            item = library.update_item(item_id, request.model_dump(exclude_unset=True))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        ui_log.add("info", f"Updated local library item: {item.title}")
+        return {"item": _library_item_response(item)}
 
     @app.get("/api/lokr/datasets")
     def list_lokr_datasets() -> list[dict[str, Any]]:

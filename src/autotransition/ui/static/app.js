@@ -56,6 +56,8 @@ const state = {
   extractionTracks: [],
   extractionResults: [],
   editorAssets: [],
+  localLibraryItems: [],
+  localLibraryIndexPath: "",
   selectedEditorAsset: null,
   extractSourceProbe: null,
 };
@@ -67,12 +69,14 @@ const el = {
   lokrTrainingTabButton: document.querySelector("#lokrTrainingTabButton"),
   instrumentLabTabButton: document.querySelector("#instrumentLabTabButton"),
   audioEditTabButton: document.querySelector("#audioEditTabButton"),
+  libraryTabButton: document.querySelector("#libraryTabButton"),
   transitionPage: document.querySelector("#transitionPage"),
   extractionPage: document.querySelector("#extractionPage"),
   musicPage: document.querySelector("#musicPage"),
   lokrTrainingPage: document.querySelector("#lokrTrainingPage"),
   instrumentLabPage: document.querySelector("#instrumentLabPage"),
   audioEditPage: document.querySelector("#audioEditPage"),
+  libraryPage: document.querySelector("#libraryPage"),
   ffmpegBadge: document.querySelector("#ffmpegBadge"),
   modelCountBadge: document.querySelector("#modelCountBadge"),
   runtimeBadge: document.querySelector("#runtimeBadge"),
@@ -276,6 +280,15 @@ const el = {
   editSourceAssetReadout: document.querySelector("#editSourceAssetReadout"),
   editSaveState: document.querySelector("#editSaveState"),
   saveEditButton: document.querySelector("#saveEditButton"),
+  libraryState: document.querySelector("#libraryState"),
+  libraryDetailState: document.querySelector("#libraryDetailState"),
+  libraryIndexPath: document.querySelector("#libraryIndexPath"),
+  librarySearch: document.querySelector("#librarySearch"),
+  libraryKindFilter: document.querySelector("#libraryKindFilter"),
+  reindexLibraryButton: document.querySelector("#reindexLibraryButton"),
+  refreshLibraryButton: document.querySelector("#refreshLibraryButton"),
+  libraryList: document.querySelector("#libraryList"),
+  librarySummary: document.querySelector("#librarySummary"),
   toast: document.querySelector("#toast"),
 };
 
@@ -475,12 +488,14 @@ function setActivePage(page) {
   el.lokrTrainingPage.classList.toggle("active", page === "lokr");
   el.instrumentLabPage.classList.toggle("active", page === "instrument");
   el.audioEditPage.classList.toggle("active", page === "audioedit");
+  el.libraryPage.classList.toggle("active", page === "library");
   el.transitionTabButton.classList.toggle("active", page === "transition");
   el.extractionTabButton.classList.toggle("active", page === "extraction");
   el.musicTabButton.classList.toggle("active", page === "music");
   el.lokrTrainingTabButton.classList.toggle("active", page === "lokr");
   el.instrumentLabTabButton.classList.toggle("active", page === "instrument");
   el.audioEditTabButton.classList.toggle("active", page === "audioedit");
+  el.libraryTabButton.classList.toggle("active", page === "library");
   if (page === "instrument") {
     window.setTimeout(drawInstrumentPianoRoll, 50);
   }
@@ -496,6 +511,92 @@ function openAudioEditorWindow() {
 
 function assetAudioUrl(asset) {
   return `/api/editor/audio?path=${encodeURIComponent(asset.audio_path)}`;
+}
+
+function libraryAudioUrl(item) {
+  const audioFile = (item.files || []).find((file) => file.role === "audio") || (item.files || [])[0];
+  return audioFile ? `/api/audio?path=${encodeURIComponent(audioFile.path)}` : "";
+}
+
+function filteredLibraryItems() {
+  const query = el.librarySearch.value.trim().toLowerCase();
+  const kind = el.libraryKindFilter.value;
+  return state.localLibraryItems.filter((item) => {
+    if (kind !== "all" && item.kind !== kind) return false;
+    if (!query) return true;
+    const filePaths = (item.files || []).map((file) => file.path).join(" ");
+    return [item.title, item.kind, (item.tags || []).join(" "), filePaths]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+}
+
+function renderLocalLibrary() {
+  el.libraryList.replaceChildren();
+  const items = filteredLibraryItems();
+  setPill(el.libraryState, `${items.length} shown`, items.length ? "ok" : "neutral");
+  el.libraryIndexPath.textContent = state.localLibraryIndexPath || "Index not created";
+  el.librarySummary.innerHTML = [
+    `<strong>${state.localLibraryItems.length} indexed items</strong>`,
+    "The local library references existing Dance Station files in place.",
+    "Use Reindex Creations after generating, editing, extracting, or training new assets.",
+  ].join("<br>");
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = state.localLibraryItems.length ? "No matching library items." : "No local library items yet. Reindex creations to build the local library.";
+    el.libraryList.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const row = document.createElement("article");
+    row.className = "library-item";
+    row.dataset.itemId = item.id;
+    const audioUrl = libraryAudioUrl(item);
+    const primaryFile = (item.files || [])[0] || {};
+    row.innerHTML = `
+      <div class="editor-asset-title">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span class="category-badge">${escapeHtml(item.kind)}</span>
+      </div>
+      ${audioUrl ? `<audio controls preload="metadata" src="${audioUrl}"></audio>` : ""}
+      <p class="asset-path">${escapeHtml(primaryFile.path || "No file path")}</p>
+      <div class="library-meta-row">
+        <span>${escapeHtml(item.status)}</span>
+        <span>${escapeHtml(item.visibility)}</span>
+        <span>${escapeHtml(formatLibraryDate(item.updated_at || item.created_at))}</span>
+      </div>
+      <div class="control-grid library-edit-grid">
+        <label class="field">
+          <span>Title</span>
+          <input class="library-title-input" type="text" value="${escapeHtml(item.title)}" />
+        </label>
+        <label class="field">
+          <span>Tags</span>
+          <input class="library-tags-input" type="text" value="${escapeHtml((item.tags || []).join(", "))}" placeholder="comma separated" />
+        </label>
+      </div>
+      <label class="field">
+        <span>Description</span>
+        <textarea class="library-description-input" rows="2">${escapeHtml(item.description || "")}</textarea>
+      </label>
+      <div class="button-row generated-actions">
+        <button class="secondary-button library-save-button" type="button">Save Metadata</button>
+      </div>
+    `;
+    row.querySelector(".library-save-button").addEventListener("click", () => saveLibraryItem(row, item));
+    el.libraryList.appendChild(row);
+  });
+}
+
+function formatLibraryDate(value) {
+  if (!value) return "No date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
 }
 
 function filteredEditorAssets() {
@@ -1201,6 +1302,48 @@ async function refreshEditorAssets() {
   state.editorAssets = await api("/api/editor/assets");
   renderSourceAssetOptions();
   renderEditorAssets();
+}
+
+async function refreshLocalLibrary() {
+  const response = await api("/api/library/local");
+  state.localLibraryItems = response.items || [];
+  state.localLibraryIndexPath = response.index_path || "";
+  renderLocalLibrary();
+}
+
+async function reindexLocalLibrary() {
+  setPill(el.libraryState, "Reindexing", "warn");
+  const response = await api("/api/library/local/reindex", { method: "POST" });
+  state.localLibraryItems = response.items || [];
+  state.localLibraryIndexPath = response.index_path || "";
+  renderLocalLibrary();
+  showToast(`Indexed ${response.count || 0} local library items`);
+}
+
+async function saveLibraryItem(row, item) {
+  const title = row.querySelector(".library-title-input").value.trim();
+  const description = row.querySelector(".library-description-input").value.trim();
+  const tags = row
+    .querySelector(".library-tags-input")
+    .value.split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  if (!title) {
+    showToast("Enter a title");
+    return;
+  }
+  try {
+    const response = await api(`/api/library/local/${encodeURIComponent(item.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title, description, tags }),
+    });
+    const index = state.localLibraryItems.findIndex((candidate) => candidate.id === item.id);
+    if (index >= 0) state.localLibraryItems[index] = response.item;
+    renderLocalLibrary();
+    showToast("Library metadata saved");
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function safeEditFileName(label) {
@@ -2831,7 +2974,7 @@ function addGeneratedResult(result, plan) {
 
 async function loadAll() {
   await loadInstrumentBank();
-  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, lokrRuns, lokrAdapters, instrumentClips, editorAssets, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, lokrRuns, lokrAdapters, instrumentClips, editorAssets, localLibrary, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
@@ -2844,6 +2987,7 @@ async function loadAll() {
     api("/api/lokr/adapters"),
     api("/api/instrument-lab/clips"),
     api("/api/editor/assets"),
+    api("/api/library/local"),
     api("/api/logs"),
   ]);
   state.presets = presets;
@@ -2856,6 +3000,8 @@ async function loadAll() {
   state.lokrAdapters = lokrAdapters;
   state.instrumentClips = instrumentClips;
   state.editorAssets = editorAssets;
+  state.localLibraryItems = localLibrary.items || [];
+  state.localLibraryIndexPath = localLibrary.index_path || "";
   renderStatus(status);
   renderRuntime(runtime);
   renderPresets();
@@ -2875,6 +3021,7 @@ async function loadAll() {
   renderInstrumentClipList();
   renderSourceAssetOptions();
   renderEditorAssets();
+  renderLocalLibrary();
   renderLogs(logs);
 }
 
@@ -3265,14 +3412,28 @@ el.musicTabButton.addEventListener("click", () => setActivePage("music"));
 el.lokrTrainingTabButton.addEventListener("click", () => setActivePage("lokr"));
 el.instrumentLabTabButton.addEventListener("click", () => setActivePage("instrument"));
 el.audioEditTabButton.addEventListener("click", () => setActivePage("audioedit"));
+el.libraryTabButton.addEventListener("click", () => setActivePage("library"));
 el.reloadAudioEditorButton.addEventListener("click", reloadAudioEditor);
 el.openAudioEditorButton.addEventListener("click", openAudioEditorWindow);
 el.refreshEditorAssetsButton.addEventListener("click", async () => {
   await refreshEditorAssets();
   showToast("Editor assets refreshed");
 });
+el.refreshLibraryButton.addEventListener("click", async () => {
+  await refreshLocalLibrary();
+  showToast("Library refreshed");
+});
+el.reindexLibraryButton.addEventListener("click", async () => {
+  try {
+    await reindexLocalLibrary();
+  } catch (error) {
+    showToast(error.message);
+  }
+});
 el.editorAssetSearch.addEventListener("input", renderEditorAssets);
 el.editorCategoryFilter.addEventListener("change", renderEditorAssets);
+el.librarySearch.addEventListener("input", renderLocalLibrary);
+el.libraryKindFilter.addEventListener("change", renderLocalLibrary);
 el.editSaveFile.addEventListener("change", () => {
   const file = el.editSaveFile.files && el.editSaveFile.files[0];
   el.editSaveFileName.textContent = file ? file.name : "No file selected";

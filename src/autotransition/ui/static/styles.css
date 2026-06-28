@@ -249,6 +249,10 @@ h3 {
   grid-template-columns: minmax(320px, 0.45fr) minmax(520px, 1fr);
 }
 
+.workspace.library-page.active {
+  grid-template-columns: minmax(620px, 1fr) minmax(300px, 0.32fr);
+}
+
 .workspace.instrument-page.active {
   grid-template-columns: minmax(300px, 0.42fr) minmax(560px, 1fr) minmax(300px, 0.38fr);
 }
@@ -502,7 +506,13 @@ h3 {
   overflow: auto;
 }
 
-.editor-asset-item {
+.library-list {
+  display: grid;
+  gap: 12px;
+}
+
+.editor-asset-item,
+.library-item {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #111317;
@@ -550,6 +560,30 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.library-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.library-meta-row span {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: #191c20;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.library-edit-grid {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
 }
 
 .field {

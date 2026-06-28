@@ -61,9 +61,44 @@ def test_ui_index_includes_audio_editor_tab(tmp_path: Path) -> None:
     assert "Instrument Lab" in response.text
     assert "LoKr Training" in response.text
     assert "Audio Editor" in response.text
+    assert "Local Library" in response.text
     assert "Dance Station Assets" in response.text
     assert "Save Edited Result" in response.text
     assert 'src="/audiomass/"' in response.text
+
+
+def test_ui_local_library_reindexes_existing_creations(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    audio = make_wav(tmp_path / "music.wav", duration_ms=1000)
+    generation_dir = tmp_path / "data" / "generations" / "music-1"
+    generation_dir.mkdir(parents=True)
+    (generation_dir / "generation.json").write_text(
+        json.dumps(
+            {
+                "generation_id": "music-1",
+                "label": "Library test",
+                "generated_audio_path": str(audio),
+                "created_at": "2026-06-27T12:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(models_dir=tmp_path))
+
+    response = client.post("/api/library/local/reindex")
+    update = client.patch("/api/library/local/music-1", json={"title": "Renamed library item", "tags": ["test"]})
+    listed = client.get("/api/library/local")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert update.status_code == 200
+    assert listed.status_code == 200
+    item = listed.json()["items"][0]
+    assert item["id"] == "music-1"
+    assert item["kind"] == "generation"
+    assert item["title"] == "Renamed library item"
+    assert item["tags"] == ["test"]
+    assert Path(tmp_path / "data" / "library" / "items" / "music-1" / "manifest.json").exists()
 
 
 def test_ui_serves_instrument_bank_manifest(tmp_path: Path) -> None:
