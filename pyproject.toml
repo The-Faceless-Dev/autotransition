@@ -48,6 +48,7 @@ autotransition = [
   "vendor/audiomass/mp3/multi/*",
   "vendor/instrument-lab/*",
   "vendor/instrument-lab/scripts/*",
+  "vendor/instrument-lab/site/*",
   "vendor/instrument-lab/src/*",
   "vendor/instrument-lab/standalone-source/*",
   "vendor/instrument-lab/standalone-source/instruments/*",
