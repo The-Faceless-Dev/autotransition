@@ -557,6 +557,7 @@ function renderLocalLibrary() {
     row.dataset.itemId = item.id;
     const audioUrl = libraryAudioUrl(item);
     const primaryFile = (item.files || [])[0] || {};
+    const detailBadges = libraryDetailBadges(item);
     row.innerHTML = `
       <div class="editor-asset-title">
         <strong>${escapeHtml(item.title)}</strong>
@@ -568,6 +569,7 @@ function renderLocalLibrary() {
         <span>${escapeHtml(item.status)}</span>
         <span>${escapeHtml(item.visibility)}</span>
         <span>${escapeHtml(formatLibraryDate(item.updated_at || item.created_at))}</span>
+        ${detailBadges.map((badge) => `<span>${escapeHtml(badge)}</span>`).join("")}
       </div>
       <div class="control-grid library-edit-grid">
         <label class="field">
@@ -597,6 +599,15 @@ function formatLibraryDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
+}
+
+function libraryDetailBadges(item) {
+  if (item.kind !== "dataset") return [];
+  const metadata = item.metadata || {};
+  const declared = Number(metadata.sample_count || 0);
+  const indexed = Number(metadata.indexed_sample_file_count || 0);
+  const label = declared === indexed ? `${declared} samples` : `${declared} samples, ${indexed} files indexed`;
+  return [label];
 }
 
 function filteredEditorAssets() {

@@ -29,7 +29,7 @@ from autotransition.audio.formats import DEFAULT_SCAFFOLD_FORMAT, SUPPORTED_INPU
 from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.generation import GenerationResult, GenerationStatus
 from autotransition.library.index import LocalLibraryIndex
-from autotransition.library.schema import LibraryFile, LibraryItem, library_item_from_editor_asset
+from autotransition.library.schema import LibraryFile, LibraryItem, audio_mime_type_for_path, library_item_from_editor_asset
 from autotransition.models import (
     AceStepRepaintAdapter,
     AceStepRuntimeError,
@@ -1209,6 +1209,43 @@ def _library_items_from_lokr_datasets() -> list[LibraryItem]:
         metadata_path = Path(str(dataset.get("metadata_path") or ""))
         if not dataset_id or not metadata_path.exists():
             continue
+        files = [
+            LibraryFile(
+                role="dataset_manifest",
+                mime_type="application/json",
+                size_bytes=metadata_path.stat().st_size,
+                path=str(metadata_path),
+            )
+        ]
+        for sample in dataset.get("samples", []):
+            sample_path_raw = str(sample.get("resolved_audio_path") or sample.get("audio_path") or "")
+            if not sample_path_raw:
+                continue
+            sample_path = Path(sample_path_raw)
+            if not sample_path.exists() and not sample_path.is_absolute():
+                sample_path = _lokr_audio_path_for_response(dataset_id, sample_path_raw)
+            if not sample_path.exists() or not sample_path.is_file():
+                continue
+            files.append(
+                LibraryFile(
+                    role="dataset_sample",
+                    mime_type=audio_mime_type_for_path(sample_path),
+                    size_bytes=sample_path.stat().st_size,
+                    path=str(sample_path),
+                    metadata={
+                        "sample_id": sample.get("id") or "",
+                        "label": sample.get("label") or "",
+                        "caption": sample.get("caption") or "",
+                        "lyrics": sample.get("lyrics") or "",
+                        "genre": sample.get("genre") or "",
+                        "language": sample.get("language") or "",
+                        "duration": sample.get("duration") or 0,
+                        "is_instrumental": bool(sample.get("is_instrumental", True)),
+                        "source_asset_id": sample.get("source_asset_id") or "",
+                        "source_category": sample.get("source_category") or "",
+                    },
+                )
+            )
         items.append(
             LibraryItem(
                 id=dataset_id,
@@ -1216,18 +1253,12 @@ def _library_items_from_lokr_datasets() -> list[LibraryItem]:
                 status="draft",
                 kind="dataset",
                 title=str(metadata.get("label") or dataset_id),
-                files=[
-                    LibraryFile(
-                        role="dataset_manifest",
-                        mime_type="application/json",
-                        size_bytes=metadata_path.stat().st_size,
-                        path=str(metadata_path),
-                    )
-                ],
+                files=files,
                 metadata={
                     "category": "dataset",
                     "metadata_path": str(metadata_path),
                     "sample_count": metadata.get("num_samples", 0),
+                    "indexed_sample_file_count": max(0, len(files) - 1),
                     "custom_tag": metadata.get("custom_tag") or "",
                     "default_genre": metadata.get("default_genre") or "",
                     "default_language": metadata.get("default_language") or "unknown",

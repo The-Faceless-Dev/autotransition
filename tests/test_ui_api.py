@@ -104,7 +104,9 @@ def test_ui_local_library_reindexes_existing_creations(tmp_path: Path, monkeypat
 def test_ui_local_library_reindexes_lokr_datasets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     dataset_dir = tmp_path / "data" / "lokr-training" / "datasets" / "lokr-data-1"
-    dataset_dir.mkdir(parents=True)
+    audio_dir = dataset_dir / "audio"
+    audio_dir.mkdir(parents=True)
+    sample_path = make_wav(audio_dir / "sample-one.wav", duration_ms=1000)
     (dataset_dir / "dataset.json").write_text(
         json.dumps(
             {
@@ -118,7 +120,19 @@ def test_ui_local_library_reindexes_lokr_datasets(tmp_path: Path, monkeypatch) -
                     "created_at": "2026-06-27T12:00:00+00:00",
                     "updated_at": "2026-06-27T12:05:00+00:00",
                 },
-                "samples": [],
+                "samples": [
+                    {
+                        "id": "sample-1",
+                        "audio_path": f"audio/{sample_path.name}",
+                        "label": "Sample One",
+                        "caption": "tight funk pop groove",
+                        "lyrics": "[Instrumental]",
+                        "genre": "funk pop",
+                        "language": "en",
+                        "duration": 1.0,
+                        "is_instrumental": True,
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -133,7 +147,12 @@ def test_ui_local_library_reindexes_lokr_datasets(tmp_path: Path, monkeypatch) -
     assert item["kind"] == "dataset"
     assert item["title"] == "Artist dataset"
     assert item["files"][0]["role"] == "dataset_manifest"
+    assert item["files"][1]["role"] == "dataset_sample"
+    assert Path(item["files"][1]["path"]).resolve() == sample_path.resolve()
+    assert item["files"][1]["metadata"]["caption"] == "tight funk pop groove"
     assert item["metadata"]["custom_tag"] == "artist_token"
+    assert item["metadata"]["sample_count"] == 1
+    assert item["metadata"]["indexed_sample_file_count"] == 1
     assert Path(tmp_path / "data" / "library" / "items" / "lokr-data-1" / "manifest.json").exists()
 
 

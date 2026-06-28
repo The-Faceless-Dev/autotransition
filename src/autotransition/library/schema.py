@@ -30,6 +30,7 @@ LibraryFileRole = Literal[
     "cover",
     "metadata",
     "dataset_manifest",
+    "dataset_sample",
     "adapter_weights",
     "chart",
     "stem",
@@ -96,7 +97,7 @@ def library_item_from_editor_asset(asset: dict[str, Any]) -> LibraryItem | None:
         files=[
             LibraryFile(
                 role="audio",
-                mime_type=_mime_type_for_audio(audio_path),
+                mime_type=audio_mime_type_for_path(audio_path),
                 size_bytes=audio_path.stat().st_size,
                 path=str(audio_path),
                 metadata={
@@ -138,7 +139,7 @@ def _category_to_kind(category: str) -> LibraryItemKind:
     return category if category in allowed else "audio"  # type: ignore[return-value]
 
 
-def _mime_type_for_audio(path: Path) -> str:
+def audio_mime_type_for_path(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".mp3":
         return "audio/mpeg"
