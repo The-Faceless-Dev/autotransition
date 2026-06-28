@@ -45,7 +45,14 @@ autotransition = [
   "vendor/audiomass/dist/*",
   "vendor/audiomass/dist/plugin/*",
   "vendor/audiomass/fonts/*",
-  "vendor/audiomass/mp3/multi/*"
+  "vendor/audiomass/mp3/multi/*",
+  "vendor/instrument-lab/*",
+  "vendor/instrument-lab/scripts/*",
+  "vendor/instrument-lab/src/*",
+  "vendor/instrument-lab/standalone-source/*",
+  "vendor/instrument-lab/standalone-source/instruments/*",
+  "vendor/instrument-lab/standalone-source/instruments/samples/*",
+  "vendor/instrument-lab/standalone-source/instruments/samples/*/*"
 ]
 
 [tool.pytest.ini_options]
