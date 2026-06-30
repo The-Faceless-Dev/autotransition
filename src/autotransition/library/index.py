@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Iterable
 
-from autotransition.library.schema import LibraryItem, library_item_from_editor_asset, utc_now_iso
+from autotransition.library.schema import LibraryFile, LibraryItem, library_item_from_editor_asset, utc_now_iso
 
 
 class LocalLibraryIndex:
@@ -87,6 +88,50 @@ class LocalLibraryIndex:
         item.updated_at = utc_now_iso()
         return self.write_item(item)
 
+    def set_cover_image(self, item_id: str, source_path: Path, *, mime_type: str) -> LibraryItem:
+        item = self.read_item(item_id)
+        if item is None:
+            raise FileNotFoundError(f"Library item not found: {item_id}")
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(f"Cover image file not found: {source_path}")
+
+        assets_dir = self._item_assets_dir(item_id)
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        suffix = source_path.suffix.lower() or ".bin"
+        target_path = assets_dir / f"cover{suffix}"
+        shutil.copyfile(source_path, target_path)
+
+        retained_files: list[LibraryFile] = []
+        for existing in item.files:
+            if existing.role != "cover":
+                retained_files.append(existing)
+                continue
+            existing_path = Path(existing.path)
+            try:
+                if (
+                    existing_path.exists()
+                    and assets_dir in existing_path.parents
+                    and existing_path.resolve() != target_path.resolve()
+                ):
+                    existing_path.unlink()
+            except Exception:
+                pass
+
+        retained_files.append(
+            LibraryFile(
+                role="cover",
+                mime_type=mime_type,
+                size_bytes=target_path.stat().st_size,
+                path=str(target_path),
+                metadata={
+                    "label": "Card image",
+                },
+            )
+        )
+        item.files = retained_files
+        item.updated_at = utc_now_iso()
+        return self.write_item(item)
+
     def _index_ids(self) -> list[str]:
         if not self.index_path.exists():
             return []
@@ -109,6 +154,9 @@ class LocalLibraryIndex:
     def _manifest_path(self, item_id: str) -> Path:
         return self.items_dir / _safe_item_id(item_id) / "manifest.json"
 
+    def _item_assets_dir(self, item_id: str) -> Path:
+        return self.items_dir / _safe_item_id(item_id) / "assets"
+
 
 def _merge_reindexed_item(existing: LibraryItem | None, scanned: LibraryItem) -> LibraryItem:
     if existing is None:
@@ -125,6 +173,9 @@ def _merge_reindexed_item(existing: LibraryItem | None, scanned: LibraryItem) ->
     scanned.updated_at = utc_now_iso()
     scanned.metadata = {**scanned.metadata, **existing.metadata}
     scanned.source_lineage = {**scanned.source_lineage, **existing.source_lineage}
+    existing_cover_files = [file for file in existing.files if file.role == "cover"]
+    if existing_cover_files and not any(file.role == "cover" for file in scanned.files):
+        scanned.files = [*scanned.files, *existing_cover_files]
     return scanned
 
 

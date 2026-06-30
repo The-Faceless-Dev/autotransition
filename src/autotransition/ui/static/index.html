@@ -23,6 +23,7 @@
       <button id="transitionTabButton" class="tab-button active" type="button">Autotransition</button>
       <button id="extractionTabButton" class="tab-button" type="button">Track Extraction</button>
       <button id="musicTabButton" class="tab-button" type="button">Music Generation</button>
+      <button id="datasetEditorTabButton" class="tab-button" type="button">Dataset Editor</button>
       <button id="lokrTrainingTabButton" class="tab-button" type="button">LoKr Training</button>
       <button id="instrumentLabTabButton" class="tab-button" type="button">Instrument Lab</button>
       <button id="audioEditTabButton" class="tab-button" type="button">Audio Editor</button>
@@ -514,6 +515,114 @@
       </aside>
     </main>
 
+    <main id="datasetEditorPage" class="workspace app-page lokr-page">
+      <section class="panel lokr-datasets-panel">
+        <div class="panel-heading">
+          <h2>Target Datasets</h2>
+          <span id="datasetEditorTargetState" class="mini-state">Ready</span>
+        </div>
+        <label class="field">
+          <span>New target dataset</span>
+          <input id="datasetEditorNewLabel" type="text" value="New LoKr dataset" />
+        </label>
+        <div class="button-row">
+          <button id="datasetEditorCreateButton" class="primary-button" type="button">Create Target</button>
+          <button id="datasetEditorRefreshButton" class="secondary-button" type="button">Refresh</button>
+        </div>
+        <div class="file-picker">
+          <label class="file-button" for="datasetEditorJsonFile">Import Dataset JSON</label>
+          <input id="datasetEditorJsonFile" type="file" accept=".json,application/json" />
+          <span id="datasetEditorJsonFileName">No JSON selected</span>
+        </div>
+        <div class="button-row">
+          <button id="datasetEditorCreateFromJsonButton" class="secondary-button" type="button">Create Target From JSON</button>
+          <button id="datasetEditorAppendJsonButton" class="secondary-button" type="button">Append To Target</button>
+        </div>
+        <div id="datasetEditorTargetList" class="generated-list">
+          <div class="empty-result">No target datasets yet.</div>
+        </div>
+      </section>
+
+      <section class="panel lokr-editor-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Target Editor</h2>
+            <div id="datasetEditorTargetReadout" class="editor-subtitle">No target dataset selected</div>
+          </div>
+          <button id="datasetEditorSaveButton" class="primary-button" type="button">Save Target</button>
+        </div>
+
+        <div class="control-grid">
+          <label class="field">
+            <span>Label</span>
+            <input id="datasetEditorLabel" type="text" placeholder="dataset name" />
+          </label>
+          <label class="field">
+            <span>Trigger tag</span>
+            <input id="datasetEditorCustomTag" type="text" placeholder="optional trigger word" />
+          </label>
+          <label class="field">
+            <span>Default genre</span>
+            <input id="datasetEditorDefaultGenre" type="text" placeholder="optional default genre" />
+          </label>
+          <label class="field">
+            <span>Default language</span>
+            <input id="datasetEditorDefaultLanguage" type="text" value="unknown" />
+          </label>
+          <label class="field">
+            <span>Tag position</span>
+            <select id="datasetEditorTagPosition">
+              <option value="prepend">Prepend</option>
+              <option value="append">Append</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Genre ratio</span>
+            <input id="datasetEditorGenreRatio" type="number" min="0" max="1" step="0.05" value="0" />
+          </label>
+          <label class="field">
+            <span>Samples</span>
+            <input id="datasetEditorSampleCount" type="text" readonly />
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <label><input id="datasetEditorAllInstrumental" type="checkbox" checked /> All instrumental by default</label>
+        </div>
+
+        <div class="panel-heading compact-heading">
+          <h3>Target Entries</h3>
+          <span id="datasetEditorValidationState" class="mini-state">No dataset</span>
+        </div>
+        <div id="datasetEditorSummary" class="summary">Select a target dataset to edit it.</div>
+        <div id="datasetEditorEntryList" class="generated-list">
+          <div class="empty-result">Create or select a target dataset.</div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Donor Datasets</h2>
+            <span id="datasetEditorDonorState" class="mini-state">Ready</span>
+          </div>
+          <div id="datasetEditorDonorList" class="generated-list compact-library-list">
+            <div class="empty-result">No donor datasets available.</div>
+          </div>
+        </section>
+
+        <section class="panel logs-panel">
+          <div class="panel-heading">
+            <h2>Donor Entries</h2>
+            <span id="datasetEditorDonorReadout" class="mini-state">No donor selected</span>
+          </div>
+          <div id="datasetEditorDonorEntryList" class="generated-list compact-library-list">
+            <div class="empty-result">Open a donor dataset to push entries into the target.</div>
+          </div>
+        </section>
+      </aside>
+    </main>
+
     <main id="lokrTrainingPage" class="workspace app-page lokr-page">
       <section class="panel lokr-datasets-panel">
         <div class="panel-heading">
@@ -527,6 +636,15 @@
         <div class="button-row">
           <button id="createLokrDatasetButton" class="primary-button" type="button">Create Dataset</button>
           <button id="refreshLokrDatasetsButton" class="secondary-button" type="button">Refresh</button>
+        </div>
+        <div class="file-picker">
+          <label class="file-button" for="lokrDatasetJsonFile">Import Dataset JSON</label>
+          <input id="lokrDatasetJsonFile" type="file" accept=".json,application/json" />
+          <span id="lokrDatasetJsonFileName">No JSON selected</span>
+        </div>
+        <div class="button-row">
+          <button id="createLokrDatasetFromJsonButton" class="secondary-button" type="button">Create From JSON</button>
+          <button id="appendLokrDatasetJsonButton" class="secondary-button" type="button">Append To Selected</button>
         </div>
         <div id="lokrDatasetList" class="generated-list">
           <div class="empty-result">No LoKr datasets yet.</div>
@@ -610,6 +728,7 @@
               </select>
             </label>
             <button id="addLokrAssetButton" class="secondary-button" type="button">Add Creation</button>
+            <button id="addEmptyLokrEntryButton" class="secondary-button" type="button">Add Empty Entry</button>
           </div>
         </section>
 
@@ -954,6 +1073,10 @@
           </div>
           <div class="control-grid">
             <label class="field">
+              <span>Search</span>
+              <input id="publicLibrarySearch" type="search" placeholder="Search public assets" />
+            </label>
+            <label class="field">
               <span>Kind</span>
               <select id="publicLibraryKind">
                 <option value="all">All</option>
@@ -981,24 +1104,24 @@
         <section class="panel">
           <div class="panel-heading">
             <h2>Public Connection</h2>
-            <span id="libraryPublishState" class="mini-state">Not configured</span>
+            <span id="libraryPublishState" class="mini-state">Disconnected</span>
           </div>
           <div class="control-grid">
             <label class="field">
-              <span>Site API</span>
-              <input id="librarySiteUrl" type="text" value="http://localhost:3001" />
-            </label>
-            <label class="field">
-              <span>Creator publish token</span>
-              <input id="libraryPublishToken" type="password" placeholder="Paste token from the site" />
+              <span>Wallet</span>
+              <select id="libraryWalletProvider">
+                <option value="phantom">Phantom</option>
+                <option value="solflare">Solflare</option>
+                <option value="backpack">Backpack</option>
+                <option value="metamask">MetaMask</option>
+              </select>
             </label>
           </div>
           <div class="button-row generated-actions">
-            <button id="saveLibraryConnectionButton" class="primary-button" type="button">Save Connection</button>
+            <button id="connectLibraryWalletButton" class="primary-button" type="button">Connect Wallet</button>
+            <button id="disconnectLibraryWalletButton" class="secondary-button" type="button">Disconnect</button>
           </div>
-          <div class="summary">
-            Create a publish token on the Dance Station page of the site, then paste it here. Media uploads go through the site to Bunny CDN.
-          </div>
+          <div id="libraryWalletSummary" class="summary">Connect a wallet to sign in with the Faceless Dancer public library.</div>
         </section>
 
         <section class="panel">

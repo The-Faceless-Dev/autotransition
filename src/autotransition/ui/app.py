@@ -30,12 +30,18 @@ from autotransition.config import OutputConfig, RuntimeConfig, TransitionConfig
 from autotransition.generation import GenerationResult, GenerationStatus
 from autotransition.library.index import LocalLibraryIndex
 from autotransition.library.publish import (
+    DEFAULT_PUBLIC_LIBRARY_SITE_URL,
     LibraryPublishError,
     LibraryPublisher,
     LibraryPublishSettings,
     PublicLibraryClient,
+    authenticate_wallet_signature,
+    is_expired_session_error,
     load_publish_settings,
+    logout_site_session,
     public_settings_response,
+    refresh_site_session,
+    request_wallet_nonce,
     save_publish_settings,
 )
 from autotransition.library.schema import LibraryFile, LibraryItem, audio_mime_type_for_path, library_item_from_editor_asset
@@ -181,8 +187,18 @@ class LocalLibraryUpdateRequest(BaseModel):
 
 
 class PublicLibraryConnectionRequest(BaseModel):
-    site_url: str = Field("http://localhost:3001", min_length=1, max_length=500)
-    token: str | None = Field(None, max_length=400)
+    site_url: str = Field(DEFAULT_PUBLIC_LIBRARY_SITE_URL, min_length=1, max_length=500)
+
+
+class PublicLibraryAuthNonceRequest(BaseModel):
+    public_key: str = Field(..., min_length=20, max_length=120)
+
+
+class PublicLibraryAuthVerifyRequest(BaseModel):
+    public_key: str = Field(..., min_length=20, max_length=120)
+    nonce: str = Field(..., min_length=1, max_length=200)
+    message: str = Field(..., min_length=1, max_length=2000)
+    signature: list[int] = Field(..., min_length=1)
 
 
 class PublicLibraryPublishRequest(BaseModel):
@@ -233,6 +249,15 @@ class LokrDatasetSaveRequest(BaseModel):
 
 class LokrDatasetAssetRequest(BaseModel):
     asset_id: str = Field(..., min_length=1)
+
+
+class LokrDatasetEntryAssetRequest(BaseModel):
+    entry_id: str = Field(..., min_length=1)
+    asset_id: str = Field(..., min_length=1)
+
+
+class LokrDatasetImportRequest(BaseModel):
+    label: str | None = Field(None, max_length=120)
 
 
 class LokrPreprocessRequest(BaseModel):
@@ -579,6 +604,30 @@ def _lokr_clean_sample(
     }
 
 
+def _lokr_empty_sample(
+    dataset_id: str,
+    *,
+    label: str = "",
+    default_genre: str = "",
+    default_language: str = "unknown",
+) -> dict[str, Any]:
+    return _lokr_clean_sample(
+        dataset_id,
+        {
+            "id": f"sample-{uuid4().hex[:10]}",
+            "audio_path": "",
+            "filename": "",
+            "label": label or "Untitled entry",
+            "caption": "",
+            "genre": default_genre,
+            "lyrics": "[Instrumental]",
+            "duration": 0,
+            "language": default_language,
+            "is_instrumental": True,
+        },
+    )
+
+
 def _lokr_clean_dataset(dataset: dict[str, Any], dataset_id: str | None = None) -> dict[str, Any]:
     import datetime as _datetime
 
@@ -618,11 +667,21 @@ def _lokr_dataset_for_response(dataset: dict[str, Any]) -> dict[str, Any]:
     dataset_id = str(dataset.get("metadata", {}).get("dataset_id") or "")
     response = json.loads(json.dumps(dataset))
     response["metadata_path"] = str(_lokr_dataset_path(dataset_id)) if dataset_id else ""
+    missing_audio_entries: list[str] = []
     for sample in response.get("samples", []):
         audio_path = str(sample.get("audio_path") or "")
         resolved = _lokr_audio_path_for_response(dataset_id, audio_path) if dataset_id and audio_path else Path()
-        sample["resolved_audio_path"] = str(resolved) if str(resolved) != "." else ""
-        sample["audio_url"] = f"/api/lokr/audio?path={quote(str(resolved))}" if resolved and str(resolved) != "." else ""
+        resolved_path = str(resolved) if str(resolved) != "." else ""
+        has_audio = bool(resolved_path and resolved.exists() and resolved.is_file())
+        sample["resolved_audio_path"] = resolved_path
+        sample["audio_url"] = f"/api/lokr/audio?path={quote(str(resolved))}" if has_audio else ""
+        sample["has_audio"] = has_audio
+        if not has_audio:
+            missing_audio_entries.append(str(sample.get("id") or ""))
+    response["validation"] = {
+        "missing_audio_entries": [entry_id for entry_id in missing_audio_entries if entry_id],
+        "missing_audio_count": len([entry_id for entry_id in missing_audio_entries if entry_id]),
+    }
     return response
 
 
@@ -637,6 +696,10 @@ def _write_lokr_dataset(dataset: dict[str, Any], dataset_id: str | None = None) 
     clean = _lokr_clean_dataset(dataset, dataset_id=dataset_id)
     metadata_path = _lokr_dataset_path(str(clean["metadata"]["dataset_id"]))
     _write_metadata(metadata_path, clean)
+    try:
+        _sync_local_library_index()
+    except Exception:
+        pass
     return clean
 
 
@@ -685,6 +748,230 @@ def _lokr_sample_from_audio(
             "source_category": source_category,
         },
     )
+
+
+def _lokr_attach_audio_to_entry(
+    dataset: dict[str, Any],
+    *,
+    dataset_id: str,
+    entry_id: str,
+    source_path: Path,
+    label: str,
+    source_asset_id: str = "",
+    source_category: str = "",
+) -> dict[str, Any]:
+    samples = list(dataset.get("samples") or [])
+    index = next((i for i, sample in enumerate(samples) if str(sample.get("id") or "") == entry_id), -1)
+    if index < 0:
+        raise FileNotFoundError(f"Dataset entry not found: {entry_id}")
+    original = dict(samples[index])
+    metadata = dataset.get("metadata", {})
+    sample = _lokr_sample_from_audio(
+        dataset_id=dataset_id,
+        source_path=source_path,
+        label=label or str(original.get("label") or source_path.stem),
+        default_genre=str(original.get("genre") or metadata.get("default_genre") or ""),
+        default_language=str(original.get("language") or metadata.get("default_language") or "unknown"),
+        source_asset_id=source_asset_id or str(original.get("source_asset_id") or ""),
+        source_category=source_category or str(original.get("source_category") or ""),
+    )
+    merged = {
+        **original,
+        **sample,
+        "id": entry_id,
+        "label": str(original.get("label") or label or sample.get("label") or "Untitled entry"),
+        "caption": str(original.get("caption") or ""),
+        "lyrics": str(original.get("lyrics") or "[Instrumental]"),
+        "formatted_lyrics": str(original.get("formatted_lyrics") or original.get("lyrics") or "[Instrumental]"),
+        "raw_lyrics": str(original.get("raw_lyrics") or ""),
+        "genre": str(original.get("genre") or sample.get("genre") or ""),
+        "language": str(original.get("language") or sample.get("language") or "unknown"),
+        "custom_tag": str(original.get("custom_tag") or ""),
+        "prompt_override": original.get("prompt_override") or None,
+        "is_instrumental": bool(original.get("is_instrumental", True)),
+        "labeled": bool(original.get("labeled", bool(original.get("caption")))),
+        "source_asset_id": source_asset_id or str(original.get("source_asset_id") or ""),
+        "source_category": source_category or str(original.get("source_category") or ""),
+    }
+    samples[index] = _lokr_clean_sample(
+        dataset_id,
+        merged,
+        str(metadata.get("custom_tag") or ""),
+        str(metadata.get("default_genre") or ""),
+        str(metadata.get("default_language") or "unknown"),
+    )
+    dataset["samples"] = samples
+    return samples[index]
+
+
+def _lokr_missing_audio_entries(dataset: dict[str, Any]) -> list[dict[str, Any]]:
+    dataset_id = str((dataset.get("metadata") or {}).get("dataset_id") or "")
+    missing: list[dict[str, Any]] = []
+    for sample in list(dataset.get("samples") or []):
+        audio_path = str(sample.get("audio_path") or "")
+        if not audio_path:
+            missing.append(sample)
+            continue
+        resolved = _lokr_audio_path_for_response(dataset_id, audio_path) if dataset_id else Path()
+        if not resolved.exists() or not resolved.is_file():
+            missing.append(sample)
+    return missing
+
+
+def _coerce_import_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _resolve_import_audio_source(raw_value: str) -> Path | None:
+    location = str(raw_value or "").strip()
+    if not location:
+        return None
+    candidate = Path(location).expanduser()
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    try:
+        resolved = (Path.cwd() / location).expanduser().resolve()
+    except Exception:
+        return None
+    if resolved.exists() and resolved.is_file():
+        return resolved
+    return None
+
+
+def _extract_import_samples(payload: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if isinstance(payload, list):
+        return {}, [_coerce_import_dict(item) for item in payload]
+    root = _coerce_import_dict(payload)
+    for key in ("samples", "entries", "items", "data"):
+        value = root.get(key)
+        if isinstance(value, list):
+            return root, [_coerce_import_dict(item) for item in value]
+    if any(key in root for key in ("caption", "name", "label", "title", "lyrics", "audio_path", "audio", "audio_location", "audioLocation")):
+        return {}, [root]
+    return root, []
+
+
+def _import_entry_label(entry: dict[str, Any], index: int) -> str:
+    return (
+        str(entry.get("label") or "").strip()
+        or str(entry.get("name") or "").strip()
+        or str(entry.get("title") or "").strip()
+        or f"Imported entry {index + 1}"
+    )
+
+
+def _normalize_imported_dataset_entry(
+    dataset_id: str,
+    entry: dict[str, Any],
+    *,
+    index: int,
+    default_genre: str,
+    default_language: str,
+    fallback_tag: str,
+) -> dict[str, Any]:
+    label = _import_entry_label(entry, index)
+    audio_location = (
+        str(entry.get("audio_path") or "").strip()
+        or str(entry.get("audio") or "").strip()
+        or str(entry.get("audio_location") or "").strip()
+        or str(entry.get("audioLocation") or "").strip()
+        or str(entry.get("path") or "").strip()
+    )
+    resolved_audio = _resolve_import_audio_source(audio_location)
+    imported = _lokr_empty_sample(
+        dataset_id,
+        label=label,
+        default_genre=str(entry.get("genre") or default_genre or "").strip(),
+        default_language=str(entry.get("language") or default_language or "unknown").strip() or "unknown",
+    )
+    imported.update(
+        {
+            "id": str(entry.get("id") or imported["id"]),
+            "label": label,
+            "caption": str(entry.get("caption") or "").strip(),
+            "genre": str(entry.get("genre") or default_genre or "").strip(),
+            "lyrics": str(entry.get("lyrics") or "[Instrumental]").strip() or "[Instrumental]",
+            "raw_lyrics": str(entry.get("raw_lyrics") or "").strip(),
+            "formatted_lyrics": str(entry.get("formatted_lyrics") or entry.get("lyrics") or "[Instrumental]").strip() or "[Instrumental]",
+            "bpm": entry.get("bpm") if entry.get("bpm") not in ("", None) else "N/A",
+            "keyscale": str(entry.get("keyscale") or entry.get("key") or "N/A"),
+            "timesignature": str(entry.get("timesignature") or entry.get("time_signature") or "4"),
+            "language": str(entry.get("language") or default_language or "unknown").strip() or "unknown",
+            "is_instrumental": bool(entry.get("is_instrumental", not str(entry.get("lyrics") or "").strip() or str(entry.get("lyrics") or "").strip() == "[Instrumental]")),
+            "custom_tag": str(entry.get("custom_tag") or fallback_tag or "").strip(),
+            "prompt_override": entry.get("prompt_override") or None,
+            "labeled": bool(entry.get("labeled", bool(str(entry.get("caption") or "").strip()))),
+            "source_audio_location": audio_location,
+        }
+    )
+    known_keys = {
+        "id","label","name","title","caption","genre","lyrics","raw_lyrics","formatted_lyrics","bpm","keyscale","key",
+        "timesignature","time_signature","language","is_instrumental","custom_tag","prompt_override","labeled",
+        "audio_path","audio","audio_location","audioLocation","path",
+    }
+    extras = {key: value for key, value in entry.items() if key not in known_keys}
+    if extras:
+        imported["extra_metadata"] = extras
+    imported = _lokr_clean_sample(dataset_id, imported, fallback_tag, default_genre, default_language)
+    if resolved_audio is None:
+        imported["audio_path"] = ""
+        imported["filename"] = str(Path(audio_location).name) if audio_location else imported.get("filename", "")
+        imported["duration"] = float(entry.get("duration") or imported.get("duration") or 0)
+        return imported
+    copied = _lokr_sample_from_audio(
+        dataset_id=dataset_id,
+        source_path=resolved_audio,
+        label=label,
+        default_genre=str(imported.get("genre") or default_genre or ""),
+        default_language=str(imported.get("language") or default_language or "unknown"),
+    )
+    merged = {**imported, **copied, "id": imported["id"], "caption": imported["caption"], "lyrics": imported["lyrics"], "raw_lyrics": imported["raw_lyrics"], "formatted_lyrics": imported["formatted_lyrics"], "custom_tag": imported["custom_tag"], "prompt_override": imported["prompt_override"], "labeled": imported["labeled"]}
+    if extras:
+        merged["extra_metadata"] = extras
+    merged["source_audio_location"] = audio_location
+    return _lokr_clean_sample(dataset_id, merged, fallback_tag, default_genre, default_language)
+
+
+def _dataset_from_import_payload(
+    *,
+    dataset_id: str,
+    label: str,
+    payload: Any,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    existing = existing or {"metadata": {}, "samples": []}
+    root, raw_entries = _extract_import_samples(payload)
+    metadata = dict(existing.get("metadata") or {})
+    root_meta = _coerce_import_dict(root.get("metadata"))
+    resolved_label = label.strip() or str(root_meta.get("label") or root_meta.get("name") or root.get("label") or root.get("name") or metadata.get("label") or "Imported LoKr dataset").strip()
+    default_genre = str(root_meta.get("default_genre") or root.get("default_genre") or metadata.get("default_genre") or "").strip()
+    default_language = str(root_meta.get("default_language") or root.get("default_language") or metadata.get("default_language") or "unknown").strip() or "unknown"
+    custom_tag = str(root_meta.get("custom_tag") or root.get("custom_tag") or metadata.get("custom_tag") or "").strip()
+    merged_dataset = {
+        "metadata": {
+            **metadata,
+            **root_meta,
+            "dataset_id": dataset_id,
+            "label": resolved_label,
+            "name": str(root_meta.get("name") or root.get("name") or resolved_label),
+            "default_genre": default_genre,
+            "default_language": default_language,
+            "custom_tag": custom_tag,
+        },
+        "samples": list(existing.get("samples") or []),
+    }
+    for index, entry in enumerate(raw_entries):
+        merged_dataset["samples"].append(
+            _normalize_imported_dataset_entry(
+                dataset_id,
+                entry,
+                index=index,
+                default_genre=default_genre,
+                default_language=default_language,
+                fallback_tag=custom_tag,
+            )
+        )
+    return merged_dataset
 
 
 def _lokr_latest_tensor_dir(dataset_id: str) -> str:
@@ -1238,6 +1525,11 @@ def _local_library() -> LocalLibraryIndex:
     return LocalLibraryIndex(Path("data/library"))
 
 
+def _sync_local_library_index() -> list[LibraryItem]:
+    library = _local_library()
+    return library.reindex_items(_local_library_scanned_items())
+
+
 def _library_item_response(item: LibraryItem) -> dict[str, Any]:
     if hasattr(item, "model_dump"):
         return item.model_dump()
@@ -1376,6 +1668,119 @@ def _local_library_scanned_items() -> list[LibraryItem]:
     return items
 
 
+def _dataset_source_id(kind: str, value: str) -> str:
+    return f"{kind}:{value}"
+
+
+def _dataset_source_summary_from_local(dataset: dict[str, Any]) -> dict[str, Any]:
+    metadata = dataset.get("metadata") or {}
+    dataset_id = str(metadata.get("dataset_id") or "")
+    return {
+        "source_id": _dataset_source_id("local", dataset_id),
+        "source_kind": "local",
+        "dataset_id": dataset_id,
+        "label": metadata.get("label") or metadata.get("name") or dataset_id,
+        "sample_count": len(dataset.get("samples") or []),
+        "metadata": metadata,
+    }
+
+
+def _dataset_source_from_library_item(item: LibraryItem) -> dict[str, Any] | None:
+    if item.kind != "dataset":
+        return None
+    samples: list[dict[str, Any]] = []
+    for file in item.files:
+        if file.role != "dataset_sample":
+            continue
+        path = Path(file.path).expanduser()
+        if not path.exists() or not path.is_file():
+            continue
+        sample_metadata = dict(file.metadata or {})
+        sample_id = str(sample_metadata.get("sample_id") or file.id)
+        label = str(sample_metadata.get("label") or path.stem or sample_id)
+        samples.append(
+            {
+                "id": sample_id,
+                "label": label,
+                "filename": path.name,
+                "audio_path": str(path),
+                "resolved_audio_path": str(path),
+                "audio_url": f"/api/audio?path={quote(str(path))}",
+                "caption": str(sample_metadata.get("caption") or ""),
+                "lyrics": str(sample_metadata.get("lyrics") or "[Instrumental]"),
+                "formatted_lyrics": str(sample_metadata.get("lyrics") or "[Instrumental]"),
+                "genre": str(sample_metadata.get("genre") or ""),
+                "language": str(sample_metadata.get("language") or "unknown"),
+                "duration": sample_metadata.get("duration") or sample_metadata.get("duration_seconds") or 0,
+                "is_instrumental": bool(sample_metadata.get("is_instrumental", True)),
+                "source_asset_id": sample_metadata.get("source_asset_id") or "",
+                "source_category": sample_metadata.get("source_category") or "",
+                "prompt_override": sample_metadata.get("prompt_override"),
+                "custom_tag": sample_metadata.get("custom_tag") or "",
+                "labeled": bool(sample_metadata.get("label")),
+                "bpm": sample_metadata.get("bpm") or "N/A",
+                "keyscale": sample_metadata.get("keyscale") or "N/A",
+                "timesignature": sample_metadata.get("timesignature") or "4",
+            }
+        )
+    return {
+        "source_id": _dataset_source_id("library", item.id),
+        "source_kind": "library",
+        "library_item_id": item.id,
+        "label": item.title,
+        "sample_count": len(samples),
+        "metadata": {
+            **(item.metadata or {}),
+            "dataset_id": item.id,
+            "label": item.title,
+        },
+        "samples": samples,
+    }
+
+
+def _dataset_sources() -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for metadata_path in _lokr_dataset_root().glob("*/dataset.json"):
+        try:
+            dataset = _lokr_dataset_for_response(_read_lokr_dataset(metadata_path.parent.name))
+        except Exception:
+            continue
+        sources.append(_dataset_source_summary_from_local(dataset))
+    for item in _local_library().list_items():
+        if not bool((item.metadata or {}).get("imported")):
+            continue
+        source = _dataset_source_from_library_item(item)
+        if source:
+            source.pop("samples", None)
+            sources.append(source)
+    return sorted(sources, key=lambda item: str(item.get("metadata", {}).get("updated_at") or item.get("metadata", {}).get("created_at") or ""), reverse=True)
+
+
+def _dataset_source_detail(source_id: str) -> dict[str, Any]:
+    if source_id.startswith("local:"):
+        dataset_id = source_id.split(":", 1)[1]
+        dataset = _lokr_dataset_for_response(_read_lokr_dataset(dataset_id))
+        return {
+            "source_id": source_id,
+            "source_kind": "local",
+            "dataset_id": dataset_id,
+            "label": (dataset.get("metadata") or {}).get("label") or dataset_id,
+            "sample_count": len(dataset.get("samples") or []),
+            "metadata": dataset.get("metadata") or {},
+            "samples": dataset.get("samples") or [],
+        }
+    if source_id.startswith("library:"):
+        item_id = source_id.split(":", 1)[1]
+        item = _local_library().read_item(item_id)
+        if item is None:
+            raise FileNotFoundError(f"Imported dataset not found: {item_id}")
+        source = _dataset_source_from_library_item(item)
+        if source is None:
+            raise FileNotFoundError(f"Dataset source not found: {source_id}")
+        return source
+    raise FileNotFoundError(f"Dataset source not found: {source_id}")
+
+
 def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig | None = None) -> FastAPI:
     runtime_config = runtime_config or RuntimeConfig()
     app = FastAPI(title="Dance Station", version="0.1.0")
@@ -1438,8 +1843,18 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         audio_path = Path(path).expanduser()
         if not audio_path.exists() or not audio_path.is_file():
             raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
-        validate_supported_source(audio_path)
+        try:
+            validate_supported_source(audio_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return FileResponse(audio_path)
+
+    @app.get("/api/library/file")
+    def get_library_file(path: str = Query(..., min_length=1)) -> FileResponse:
+        file_path = Path(path).expanduser()
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Library file not found: {file_path}")
+        return FileResponse(file_path)
 
     @app.get("/api/extractions/tracks")
     def get_extraction_tracks() -> list[str]:
@@ -1512,18 +1927,93 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         ui_log.add("info", f"Updated local library item: {item.title}")
         return {"item": _library_item_response(item)}
 
+    @app.post("/api/library/local/{item_id}/cover")
+    def set_local_library_cover(item_id: str, file: UploadFile = File(...)) -> dict[str, object]:
+        content_type = str(file.content_type or "").lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Card image must be an image file.")
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            raise HTTPException(status_code=400, detail="Supported card image formats: PNG, JPG, JPEG, WEBP, GIF.")
+        tmp_dir = Path("data/library/.uploads")
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = tmp_dir / f"{uuid4().hex}{suffix}"
+        try:
+            tmp_path.write_bytes(file.file.read())
+            item = _local_library().set_cover_image(item_id, tmp_path, mime_type=content_type or "application/octet-stream")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        ui_log.add("info", f"Updated card image for local library item: {item.title}")
+        return {"item": _library_item_response(item)}
+
     @app.get("/api/library/publish/connection")
     def get_public_library_connection() -> dict[str, Any]:
-        return public_settings_response(load_publish_settings())
+        settings = load_publish_settings()
+        if settings.authenticated and settings.refresh_token:
+            try:
+                refreshed = refresh_site_session(settings)
+                save_publish_settings(refreshed)
+                settings = refreshed
+            except LibraryPublishError as exc:
+                if is_expired_session_error(str(exc)):
+                    settings = settings.cleared_session()
+                    save_publish_settings(settings)
+                ui_log.add("warn", f"Public library session refresh failed: {exc}")
+        return public_settings_response(settings)
 
     @app.post("/api/library/publish/connection")
     def save_public_library_connection(request: PublicLibraryConnectionRequest) -> dict[str, Any]:
         existing = load_publish_settings()
-        token = request.token if request.token is not None and request.token.strip() else existing.token
-        settings = LibraryPublishSettings(site_url=request.site_url.strip().rstrip("/"), token=token)
+        site_url = DEFAULT_PUBLIC_LIBRARY_SITE_URL
+        settings = existing if existing.site_url.rstrip("/") == site_url else LibraryPublishSettings(site_url=site_url)
+        settings.site_url = site_url
         save_publish_settings(settings)
-        ui_log.add("info", f"Saved public library connection for {settings.site_url}.")
+        ui_log.add("info", f"Using public library connection for {settings.site_url}.")
         return public_settings_response(settings)
+
+    @app.post("/api/library/publish/auth/nonce")
+    def create_public_library_auth_nonce(request: PublicLibraryAuthNonceRequest) -> dict[str, Any]:
+        settings = load_publish_settings()
+        try:
+            return request_wallet_nonce(settings, request.public_key.strip())
+        except LibraryPublishError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/library/publish/auth/verify")
+    def verify_public_library_auth(request: PublicLibraryAuthVerifyRequest) -> dict[str, Any]:
+        settings = load_publish_settings()
+        try:
+            signature_bytes = bytes(request.signature)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Signature payload is invalid.") from exc
+        try:
+            authenticated = authenticate_wallet_signature(
+                settings,
+                public_key=request.public_key.strip(),
+                nonce=request.nonce,
+                message=request.message,
+                signature_bytes=signature_bytes,
+            )
+        except LibraryPublishError as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        save_publish_settings(authenticated)
+        display_name = (authenticated.creator_profile or {}).get("displayName") or authenticated.public_key[:10]
+        ui_log.add("info", f"Connected public library wallet for {display_name}.")
+        return public_settings_response(authenticated)
+
+    @app.post("/api/library/publish/auth/logout")
+    def logout_public_library_auth() -> dict[str, Any]:
+        settings = load_publish_settings()
+        cleared = logout_site_session(settings)
+        save_publish_settings(cleared)
+        ui_log.add("info", "Disconnected public library wallet session.")
+        return public_settings_response(cleared)
 
     @app.post("/api/library/local/{item_id}/publish")
     def publish_local_library_item(item_id: str, request: PublicLibraryPublishRequest) -> dict[str, Any]:
@@ -1533,17 +2023,48 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             raise HTTPException(status_code=404, detail=f"Library item not found: {item_id}")
 
         try:
-            publish_result = LibraryPublisher(load_publish_settings()).publish(
+            publisher = LibraryPublisher(load_publish_settings())
+            publish_result = publisher.publish(
                 item,
                 publish_public=request.publish_public,
             )
+            save_publish_settings(publisher.settings)
             updated = library.update_publish_metadata(item_id, publish_result)
         except (FileNotFoundError, LibraryPublishError) as exc:
+            if isinstance(exc, LibraryPublishError) and is_expired_session_error(str(exc)):
+                save_publish_settings(load_publish_settings().cleared_session())
+                message = "Public library session expired. Connect your wallet again and retry publishing."
+                ui_log.add("error", message)
+                raise HTTPException(status_code=400, detail=message) from exc
             ui_log.add("error", str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         ui_log.add("info", f"Published local library item '{updated.title}' to the public library.")
         return {"item": _library_item_response(updated), "publish": publish_result}
+
+    @app.post("/api/library/local/{item_id}/revoke")
+    def revoke_local_library_item(item_id: str) -> dict[str, Any]:
+        library = _local_library()
+        item = library.read_item(item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"Library item not found: {item_id}")
+
+        try:
+            publisher = LibraryPublisher(load_publish_settings())
+            revoke_result = publisher.revoke(item)
+            save_publish_settings(publisher.settings)
+            updated = library.update_publish_metadata(item_id, revoke_result)
+        except (FileNotFoundError, LibraryPublishError) as exc:
+            if isinstance(exc, LibraryPublishError) and is_expired_session_error(str(exc)):
+                save_publish_settings(load_publish_settings().cleared_session())
+                message = "Public library session expired. Connect your wallet again and retry revoking."
+                ui_log.add("error", message)
+                raise HTTPException(status_code=400, detail=message) from exc
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        ui_log.add("info", f"Revoked public library item for '{updated.title}'.")
+        return {"item": _library_item_response(updated), "publish": revoke_result}
 
     @app.get("/api/library/public")
     def list_public_library(kind: str = Query("all", max_length=80)) -> dict[str, Any]:
@@ -1579,6 +2100,17 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
             datasets.append(_lokr_dataset_for_response(clean))
         return sorted(datasets, key=lambda item: str(item.get("metadata", {}).get("updated_at") or ""), reverse=True)
 
+    @app.get("/api/lokr/dataset-sources")
+    def list_lokr_dataset_sources() -> list[dict[str, Any]]:
+        return _dataset_sources()
+
+    @app.get("/api/lokr/dataset-sources/{source_id:path}")
+    def get_lokr_dataset_source(source_id: str) -> dict[str, Any]:
+        try:
+            return _dataset_source_detail(source_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/api/lokr/datasets/{dataset_id}")
     def get_lokr_dataset(dataset_id: str) -> dict[str, Any]:
         return _lokr_dataset_for_response(_read_lokr_dataset(dataset_id))
@@ -1611,6 +2143,21 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         ui_log.add("info", f"Created LoKr dataset: {label}")
         return {"dataset": _lokr_dataset_for_response(saved)}
 
+    @app.post("/api/lokr/datasets/import-json")
+    def import_lokr_dataset_json(
+        file: UploadFile = File(...),
+        label: str = Form(""),
+    ) -> dict[str, Any]:
+        try:
+            payload = json.loads(file.file.read().decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Dataset JSON could not be parsed.") from exc
+        dataset_id = f"lokr-{uuid4().hex[:12]}"
+        imported = _dataset_from_import_payload(dataset_id=dataset_id, label=label, payload=payload)
+        saved = _write_lokr_dataset(imported, dataset_id=dataset_id)
+        ui_log.add("info", f"Imported LoKr dataset JSON into {saved['metadata']['label']}")
+        return {"dataset": _lokr_dataset_for_response(saved)}
+
     @app.post("/api/lokr/datasets/{dataset_id}")
     def save_lokr_dataset(dataset_id: str, request: LokrDatasetSaveRequest) -> dict[str, Any]:
         incoming = request.dataset
@@ -1620,6 +2167,40 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         saved = _write_lokr_dataset(incoming, dataset_id=dataset_id)
         ui_log.add("info", f"Saved LoKr dataset: {saved['metadata']['label']}")
         return {"dataset": _lokr_dataset_for_response(saved)}
+
+    @app.post("/api/lokr/datasets/{dataset_id}/import-json")
+    def append_lokr_dataset_json(
+        dataset_id: str,
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        dataset = _read_lokr_dataset(dataset_id)
+        try:
+            payload = json.loads(file.file.read().decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Dataset JSON could not be parsed.") from exc
+        imported = _dataset_from_import_payload(
+            dataset_id=dataset_id,
+            label=str((dataset.get("metadata") or {}).get("label") or ""),
+            payload=payload,
+            existing=dataset,
+        )
+        saved = _write_lokr_dataset(imported, dataset_id=dataset_id)
+        ui_log.add("info", f"Appended JSON entries into LoKr dataset: {saved['metadata']['label']}")
+        return {"dataset": _lokr_dataset_for_response(saved)}
+
+    @app.post("/api/lokr/datasets/{dataset_id}/entries/empty")
+    def create_empty_lokr_dataset_entry(dataset_id: str) -> dict[str, Any]:
+        dataset = _read_lokr_dataset(dataset_id)
+        metadata = dataset.get("metadata", {})
+        sample = _lokr_empty_sample(
+            dataset_id,
+            default_genre=str(metadata.get("default_genre") or ""),
+            default_language=str(metadata.get("default_language") or "unknown"),
+        )
+        dataset["samples"].append(sample)
+        saved = _write_lokr_dataset(dataset, dataset_id=dataset_id)
+        ui_log.add("info", f"Added empty LoKr dataset entry: {sample['id']}")
+        return {"dataset": _lokr_dataset_for_response(saved), "sample": sample}
 
     @app.post("/api/lokr/datasets/{dataset_id}/entries/upload")
     def upload_lokr_dataset_entry(dataset_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
@@ -1648,6 +2229,33 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         ui_log.add("info", f"Added LoKr dataset entry from upload: {original_name}")
         return {"dataset": _lokr_dataset_for_response(saved), "sample": sample}
 
+    @app.post("/api/lokr/datasets/{dataset_id}/entries/{entry_id}/upload")
+    def attach_upload_to_lokr_dataset_entry(dataset_id: str, entry_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        dataset = _read_lokr_dataset(dataset_id)
+        original_name = Path(file.filename or "sample.wav").name
+        upload_dir = _lokr_dataset_audio_dir(dataset_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = upload_dir / f"upload-{uuid4().hex[:8]}{Path(original_name).suffix.lower()}"
+        try:
+            with temp_path.open("wb") as handle:
+                shutil.copyfileobj(file.file, handle)
+            sample = _lokr_attach_audio_to_entry(
+                dataset,
+                dataset_id=dataset_id,
+                entry_id=entry_id,
+                source_path=temp_path,
+                label=Path(original_name).stem,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+        saved = _write_lokr_dataset(dataset, dataset_id=dataset_id)
+        ui_log.add("info", f"Attached upload to LoKr dataset entry: {entry_id}")
+        return {"dataset": _lokr_dataset_for_response(saved), "sample": sample}
+
     @app.post("/api/lokr/datasets/{dataset_id}/entries/from-asset")
     def add_lokr_dataset_entry_from_asset(dataset_id: str, request: LokrDatasetAssetRequest) -> dict[str, Any]:
         dataset = _read_lokr_dataset(dataset_id)
@@ -1672,6 +2280,33 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         dataset["samples"].append(sample)
         saved = _write_lokr_dataset(dataset, dataset_id=dataset_id)
         ui_log.add("info", f"Added LoKr dataset entry from creation: {asset.get('label')}")
+        return {"dataset": _lokr_dataset_for_response(saved), "sample": sample}
+
+    @app.post("/api/lokr/datasets/{dataset_id}/entries/attach-asset")
+    def attach_asset_to_lokr_dataset_entry(dataset_id: str, request: LokrDatasetEntryAssetRequest) -> dict[str, Any]:
+        dataset = _read_lokr_dataset(dataset_id)
+        asset = next((item for item in _editor_assets() if item.get("asset_id") == request.asset_id), None)
+        if not asset:
+            raise HTTPException(status_code=404, detail=f"Creation not found: {request.asset_id}")
+        audio_path = Path(str(asset.get("audio_path") or "")).expanduser()
+        if not audio_path.exists():
+            raise HTTPException(status_code=404, detail=f"Creation audio not found: {audio_path}")
+        try:
+            sample = _lokr_attach_audio_to_entry(
+                dataset,
+                dataset_id=dataset_id,
+                entry_id=request.entry_id,
+                source_path=audio_path,
+                label=str(asset.get("label") or audio_path.stem),
+                source_asset_id=str(asset.get("asset_id") or ""),
+                source_category=str(asset.get("category") or ""),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        saved = _write_lokr_dataset(dataset, dataset_id=dataset_id)
+        ui_log.add("info", f"Attached creation audio to LoKr dataset entry: {request.entry_id}")
         return {"dataset": _lokr_dataset_for_response(saved), "sample": sample}
 
     @app.delete("/api/lokr/datasets/{dataset_id}/entries/{entry_id}")
@@ -1735,6 +2370,12 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
         dataset = _read_lokr_dataset(dataset_id)
         if not dataset.get("samples"):
             raise HTTPException(status_code=400, detail="Dataset has no samples.")
+        missing_audio = _lokr_missing_audio_entries(dataset)
+        if missing_audio:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset has {len(missing_audio)} entr{'y' if len(missing_audio) == 1 else 'ies'} missing audio. Attach audio before preprocessing.",
+            )
         if not side_step_status(runtime_config).installed:
             raise HTTPException(status_code=400, detail="Side-Step runtime is not installed. Run `autotransition runtime setup` or `autotransition runtime setup-sidestep`.")
         active_run = _active_lokr_run()
@@ -1765,6 +2406,12 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.post("/api/lokr/datasets/{dataset_id}/train")
     def train_lokr_dataset(dataset_id: str, request: LokrTrainRequest) -> dict[str, Any]:
         dataset = _read_lokr_dataset(dataset_id)
+        missing_audio = _lokr_missing_audio_entries(dataset)
+        if missing_audio:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset has {len(missing_audio)} entr{'y' if len(missing_audio) == 1 else 'ies'} missing audio. Attach audio before training.",
+            )
         if not side_step_status(runtime_config).installed:
             raise HTTPException(status_code=400, detail="Side-Step runtime is not installed. Run `autotransition runtime setup` or `autotransition runtime setup-sidestep`.")
         active_run = _active_lokr_run()

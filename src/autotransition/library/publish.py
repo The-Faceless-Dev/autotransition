@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -10,19 +10,112 @@ import httpx
 from autotransition.library.schema import LibraryItem
 from autotransition.library.schema import LibraryFile
 
+DEFAULT_PUBLIC_LIBRARY_SITE_URL = "https://facelessdancer.com"
+
 
 @dataclass
 class LibraryPublishSettings:
-    site_url: str = "http://localhost:3001"
-    token: str = ""
+    site_url: str = DEFAULT_PUBLIC_LIBRARY_SITE_URL
+    access_token: str = ""
+    refresh_token: str = ""
+    public_key: str = ""
+    authenticated: bool = False
+    is_holder: bool = False
+    is_admin: bool = False
+    creator_profile: dict[str, Any] = field(default_factory=dict)
 
     @property
     def configured(self) -> bool:
-        return bool(self.site_url.strip() and self.token.strip())
+        return bool(self.site_url.strip())
+
+    @property
+    def has_session(self) -> bool:
+        return bool(self.site_url.strip() and self.access_token.strip() and self.authenticated)
+
+    def cleared_session(self) -> "LibraryPublishSettings":
+        return LibraryPublishSettings(site_url=_normalize_site_url(self.site_url))
 
 
 class LibraryPublishError(RuntimeError):
     pass
+
+
+def is_expired_session_error(message: str) -> bool:
+    text = message.lower()
+    return "refresh token revoked or expired" in text or "missing refresh token" in text or "invalid refresh token" in text
+
+
+def request_wallet_nonce(settings: LibraryPublishSettings, public_key: str, timeout_seconds: float = 60.0) -> dict[str, Any]:
+    if not settings.site_url.strip():
+        raise LibraryPublishError("Public library site URL is not configured.")
+    payload = {"publicKey": public_key.strip()}
+    try:
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+            return _checked_json(client.post(f"{settings.site_url.rstrip('/')}/api/auth/nonce", json=payload), "request auth nonce")
+    except httpx.HTTPError as exc:
+        raise LibraryPublishError(f"Could not request auth nonce: {exc}") from exc
+
+
+def authenticate_wallet_signature(
+    settings: LibraryPublishSettings,
+    *,
+    public_key: str,
+    nonce: str,
+    message: str,
+    signature_bytes: bytes,
+    timeout_seconds: float = 60.0,
+) -> LibraryPublishSettings:
+    if not settings.site_url.strip():
+        raise LibraryPublishError("Public library site URL is not configured.")
+    payload = {
+        "publicKey": public_key.strip(),
+        "nonce": nonce,
+        "message": message,
+        "signature": _base58_encode(signature_bytes),
+    }
+    try:
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+            response = client.post(f"{settings.site_url.rstrip('/')}/api/auth/verify", json=payload)
+            body = _checked_json(response, "verify wallet signature")
+            access_token = _response_cookie(response, client, "accessToken")
+            refresh_token = _response_cookie(response, client, "refreshToken")
+            if not access_token or not refresh_token:
+                raise LibraryPublishError("Site authentication succeeded but did not return session cookies.")
+    except httpx.HTTPError as exc:
+        raise LibraryPublishError(f"Could not verify wallet signature: {exc}") from exc
+    return _settings_with_auth(settings, body, access_token=access_token, refresh_token=refresh_token)
+
+
+def refresh_site_session(settings: LibraryPublishSettings, timeout_seconds: float = 60.0) -> LibraryPublishSettings:
+    if not settings.site_url.strip():
+        raise LibraryPublishError("Public library site URL is not configured.")
+    if not settings.refresh_token.strip():
+        raise LibraryPublishError("No site refresh token is available. Connect your wallet again.")
+    try:
+        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+            response = client.post(
+                f"{settings.site_url.rstrip('/')}/api/auth/refresh",
+                headers={"Cookie": _cookie_header(settings)},
+            )
+            body = _checked_json(response, "refresh site session")
+            access_token = _response_cookie(response, client, "accessToken") or settings.access_token
+            refresh_token = _response_cookie(response, client, "refreshToken") or settings.refresh_token
+    except httpx.HTTPError as exc:
+        raise LibraryPublishError(f"Could not refresh site session: {exc}") from exc
+    return _settings_with_auth(settings, body, access_token=access_token, refresh_token=refresh_token)
+
+
+def logout_site_session(settings: LibraryPublishSettings, timeout_seconds: float = 30.0) -> LibraryPublishSettings:
+    if settings.site_url.strip() and (settings.access_token.strip() or settings.refresh_token.strip()):
+        try:
+            with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+                client.post(
+                    f"{settings.site_url.rstrip('/')}/api/auth/logout",
+                    headers={"Cookie": _cookie_header(settings)},
+                )
+        except Exception:
+            pass
+    return settings.cleared_session()
 
 
 class LibraryPublisher:
@@ -31,27 +124,20 @@ class LibraryPublisher:
         self.timeout_seconds = timeout_seconds
 
     def publish(self, item: LibraryItem, *, publish_public: bool = True) -> dict[str, Any]:
-        if not self.settings.configured:
-            raise LibraryPublishError("Public library connection is not configured.")
+        if not self.settings.has_session:
+            raise LibraryPublishError("Public library wallet auth is not connected.")
 
         api_base = self.settings.site_url.rstrip("/") + "/api/library"
-        headers = {"Authorization": f"Bearer {self.settings.token.strip()}"}
         payload = _item_payload(item, publish_public=publish_public)
 
         with httpx.Client(timeout=self.timeout_seconds) as client:
-            item_response = _checked_json(
-                client.post(f"{api_base}/publish/items", headers=headers, json=payload),
-                "create public library item",
-            )
+            item_response = self._request_json(client, "POST", f"{api_base}/publish/items", json=payload, action="create public library item")
             remote_item = item_response.get("item") or {}
             remote_item_id = str(remote_item.get("id") or "")
             if not remote_item_id:
                 raise LibraryPublishError("Site did not return a remote library item id.")
 
-            _checked_json(
-                client.delete(f"{api_base}/publish/items/{remote_item_id}/files", headers=headers),
-                "replace public library files",
-            )
+            self._request_json(client, "DELETE", f"{api_base}/publish/items/{remote_item_id}/files", action="replace public library files")
 
             uploaded_files: list[dict[str, Any]] = []
             for file_record in item.files:
@@ -59,31 +145,32 @@ class LibraryPublisher:
                 if not file_path.exists() or not file_path.is_file():
                     raise LibraryPublishError(f"File not found: {file_path}")
                 with file_path.open("rb") as handle:
-                    upload_response = _checked_json(
-                        client.post(
-                            f"{api_base}/publish/items/{remote_item_id}/files",
-                            headers=headers,
-                            data={
-                                "role": file_record.role,
-                                "metadata": json.dumps(file_record.metadata),
-                            },
-                            files={
-                                "file": (
-                                    file_path.name,
-                                    handle,
-                                    file_record.mime_type or "application/octet-stream",
-                                )
-                            },
-                        ),
-                        f"upload {file_path.name}",
+                    upload_response = self._request_json(
+                        client,
+                        "POST",
+                        f"{api_base}/publish/items/{remote_item_id}/files",
+                        data={
+                            "role": file_record.role,
+                            "metadata": json.dumps(file_record.metadata),
+                        },
+                        files={
+                            "file": (
+                                file_path.name,
+                                handle,
+                                file_record.mime_type or "application/octet-stream",
+                            )
+                        },
+                        action=f"upload {file_path.name}",
                     )
                 remote_item = upload_response.get("item") or remote_item
                 uploaded_files = list(remote_item.get("files") or uploaded_files)
 
             if publish_public:
-                published_response = _checked_json(
-                    client.post(f"{api_base}/publish/items/{remote_item_id}/publish", headers=headers),
-                    "publish public library item",
+                published_response = self._request_json(
+                    client,
+                    "POST",
+                    f"{api_base}/publish/items/{remote_item_id}/publish",
+                    action="publish public library item",
                 )
                 remote_item = published_response.get("item") or remote_item
                 uploaded_files = list(remote_item.get("files") or uploaded_files)
@@ -96,6 +183,51 @@ class LibraryPublisher:
             "public_url": f"{self.settings.site_url.rstrip('/')}/library",
             "remote_item": remote_item,
         }
+
+    def revoke(self, item: LibraryItem) -> dict[str, Any]:
+        if not self.settings.has_session:
+            raise LibraryPublishError("Public library wallet auth is not connected.")
+
+        publish_metadata = dict(item.metadata.get("public_library") or {})
+        remote_item_id = str(publish_metadata.get("remote_item_id") or "")
+        if not remote_item_id:
+            raise LibraryPublishError("This library item has not been published yet.")
+
+        api_base = self.settings.site_url.rstrip("/") + "/api/library"
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = self._request_json(
+                client,
+                "POST",
+                f"{api_base}/publish/items/{remote_item_id}/revoke",
+                action="revoke public library item",
+            )
+        remote_item = response.get("item") or {}
+        return {
+            "remote_item_id": remote_item_id,
+            "remote_status": remote_item.get("status") or "archived",
+            "remote_visibility": remote_item.get("visibility") or "private",
+            "file_count": len(list(remote_item.get("files") or [])),
+            "public_url": f"{self.settings.site_url.rstrip('/')}/library",
+            "remote_item": remote_item,
+        }
+
+    def _request_json(
+        self,
+        client: httpx.Client,
+        method: str,
+        url: str,
+        *,
+        action: str,
+        retry_on_auth: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        headers = dict(kwargs.pop("headers", {}))
+        headers["Authorization"] = f"Bearer {self.settings.access_token.strip()}"
+        response = client.request(method, url, headers=headers, **kwargs)
+        if response.status_code == 401 and retry_on_auth and self.settings.refresh_token.strip():
+            self.settings = refresh_site_session(self.settings, timeout_seconds=self.timeout_seconds)
+            return self._request_json(client, method, url, action=action, retry_on_auth=False, **kwargs)
+        return _checked_json(response, action)
 
 
 class PublicLibraryClient:
@@ -207,21 +339,46 @@ def load_publish_settings(path: Path = Path("data/library/publish-connection.jso
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return LibraryPublishSettings()
-    return LibraryPublishSettings(site_url=str(data.get("site_url") or "http://localhost:3001"), token=str(data.get("token") or ""))
+    return LibraryPublishSettings(
+        site_url=_normalize_site_url(str(data.get("site_url") or DEFAULT_PUBLIC_LIBRARY_SITE_URL)),
+        access_token=str(data.get("access_token") or ""),
+        refresh_token=str(data.get("refresh_token") or ""),
+        public_key=str(data.get("public_key") or ""),
+        authenticated=bool(data.get("authenticated")),
+        is_holder=bool(data.get("is_holder")),
+        is_admin=bool(data.get("is_admin")),
+        creator_profile=dict(data.get("creator_profile") or {}),
+    )
 
 
 def save_publish_settings(settings: LibraryPublishSettings, path: Path = Path("data/library/publish-connection.json")) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"site_url": settings.site_url.rstrip("/"), "token": settings.token}, indent=2),
+        json.dumps(
+            {
+                "site_url": _normalize_site_url(settings.site_url),
+                "access_token": settings.access_token,
+                "refresh_token": settings.refresh_token,
+                "public_key": settings.public_key,
+                "authenticated": settings.authenticated,
+                "is_holder": settings.is_holder,
+                "is_admin": settings.is_admin,
+                "creator_profile": settings.creator_profile,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
 
 def public_settings_response(settings: LibraryPublishSettings) -> dict[str, Any]:
     return {
-        "site_url": settings.site_url,
-        "has_token": bool(settings.token.strip()),
+        "site_url": _normalize_site_url(settings.site_url),
+        "authenticated": settings.authenticated,
+        "public_key": settings.public_key,
+        "is_holder": settings.is_holder,
+        "is_admin": settings.is_admin,
+        "creator_profile": settings.creator_profile,
         "configured": settings.configured,
     }
 
@@ -229,18 +386,22 @@ def public_settings_response(settings: LibraryPublishSettings) -> dict[str, Any]
 def _item_payload(item: LibraryItem, *, publish_public: bool) -> dict[str, Any]:
     metadata = dict(item.metadata)
     metadata.pop("public_library", None)
-    return {
+    payload: dict[str, Any] = {
         "localId": item.id,
         "visibility": "public" if publish_public else "private",
         "kind": item.kind,
         "title": item.title,
-        "description": item.description or None,
         "tags": item.tags,
         "metadata": metadata,
         "sourceLineage": {**item.source_lineage, "localId": item.id},
-        "license": item.license or None,
-        "attribution": item.attribution or None,
     }
+    if item.description:
+        payload["description"] = item.description
+    if item.license:
+        payload["license"] = item.license
+    if item.attribution:
+        payload["attribution"] = item.attribution
+    return payload
 
 
 def _checked_json(response: httpx.Response, action: str) -> dict[str, Any]:
@@ -257,3 +418,78 @@ def _checked_json(response: httpx.Response, action: str) -> dict[str, Any]:
 def _safe_path_part(value: str) -> str:
     clean = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value).strip("._")
     return (clean or "file")[:140]
+
+
+def _settings_with_auth(
+    settings: LibraryPublishSettings,
+    body: dict[str, Any],
+    *,
+    access_token: str,
+    refresh_token: str,
+) -> LibraryPublishSettings:
+    creator_profile = dict(body.get("creatorProfile") or {})
+    return LibraryPublishSettings(
+        site_url=_normalize_site_url(settings.site_url),
+        access_token=access_token,
+        refresh_token=refresh_token,
+        public_key=str(body.get("publicKey") or settings.public_key),
+        authenticated=bool(body.get("authenticated", True)),
+        is_holder=bool(body.get("isHolder")),
+        is_admin=bool(body.get("isAdmin")),
+        creator_profile=creator_profile,
+    )
+
+
+def _cookie_header(settings: LibraryPublishSettings) -> str:
+    parts: list[str] = []
+    if settings.access_token.strip():
+        parts.append(f"accessToken={settings.access_token.strip()}")
+    if settings.refresh_token.strip():
+        parts.append(f"refreshToken={settings.refresh_token.strip()}")
+    return "; ".join(parts)
+
+
+def _response_cookie(response: httpx.Response, client: httpx.Client, name: str) -> str:
+    try:
+        value = response.cookies.get(name)
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    try:
+        value = client.cookies.get(name)
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return ""
+
+
+def _base58_encode(data: bytes) -> str:
+    if not data:
+        return ""
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    number = int.from_bytes(data, "big")
+    encoded = ""
+    while number > 0:
+        number, remainder = divmod(number, 58)
+        encoded = alphabet[remainder] + encoded
+    zero_prefix = 0
+    for byte in data:
+        if byte == 0:
+            zero_prefix += 1
+        else:
+            break
+    if not encoded:
+        return "1" * zero_prefix
+    return ("1" * zero_prefix) + encoded
+
+
+def _normalize_site_url(value: str) -> str:
+    site_url = (value or "").strip().rstrip("/")
+    if not site_url:
+        return DEFAULT_PUBLIC_LIBRARY_SITE_URL
+    lowered = site_url.lower()
+    if "localhost" in lowered or "127.0.0.1" in lowered:
+        return DEFAULT_PUBLIC_LIBRARY_SITE_URL
+    return site_url
