@@ -6,7 +6,10 @@ const state = {
   sourceProbe: null,
   toastTimer: null,
   generationPollTimer: null,
+  runtimeRecoveryPollTimer: null,
   isGenerating: false,
+  runtimeStatus: null,
+  runtimeActivity: null,
   advancedDirty: false,
   generatedResults: [],
   musicResults: [],
@@ -57,6 +60,20 @@ const state = {
   instrumentPreviewUrl: null,
   instrumentDrag: null,
   instrumentNoteClipboard: [],
+  rhythmBeatProjects: [],
+  rhythmBeatVolumes: [],
+  activeRhythmProjectId: null,
+  activeRhythmProject: null,
+  activeRhythmPlaybackRef: "source",
+  selectedRhythmAnalysisId: null,
+  visibleRhythmAnalysisIds: [],
+  selectedRhythmMergeId: null,
+  selectedRhythmSelectionIds: [],
+  rhythmSelectionDrafts: {},
+  selectedRhythmDraftSegmentIndices: {},
+  selectedRhythmSavedSegmentIndices: {},
+  rhythmSelectionPointer: null,
+  rhythmAnalysisCache: new Map(),
   extractionTracks: [],
   extractionResults: [],
   editorAssets: [],
@@ -80,6 +97,7 @@ const el = {
   lokrTrainingTabButton: document.querySelector("#lokrTrainingTabButton"),
   instrumentLabTabButton: document.querySelector("#instrumentLabTabButton"),
   audioEditTabButton: document.querySelector("#audioEditTabButton"),
+  rhythmBeatTabButton: document.querySelector("#rhythmBeatTabButton"),
   libraryTabButton: document.querySelector("#libraryTabButton"),
   transitionPage: document.querySelector("#transitionPage"),
   extractionPage: document.querySelector("#extractionPage"),
@@ -88,6 +106,7 @@ const el = {
   lokrTrainingPage: document.querySelector("#lokrTrainingPage"),
   instrumentLabPage: document.querySelector("#instrumentLabPage"),
   audioEditPage: document.querySelector("#audioEditPage"),
+  rhythmBeatPage: document.querySelector("#rhythmBeatPage"),
   libraryPage: document.querySelector("#libraryPage"),
   ffmpegBadge: document.querySelector("#ffmpegBadge"),
   modelCountBadge: document.querySelector("#modelCountBadge"),
@@ -323,6 +342,67 @@ const el = {
   editSourceAssetReadout: document.querySelector("#editSourceAssetReadout"),
   editSaveState: document.querySelector("#editSaveState"),
   saveEditButton: document.querySelector("#saveEditButton"),
+  rhythmProjectReadout: document.querySelector("#rhythmProjectReadout"),
+  rhythmProjectState: document.querySelector("#rhythmProjectState"),
+  rhythmProjectLabel: document.querySelector("#rhythmProjectLabel"),
+  createRhythmProjectButton: document.querySelector("#createRhythmProjectButton"),
+  refreshRhythmProjectsButton: document.querySelector("#refreshRhythmProjectsButton"),
+  rhythmProjectList: document.querySelector("#rhythmProjectList"),
+  rhythmSourceState: document.querySelector("#rhythmSourceState"),
+  rhythmSourceFile: document.querySelector("#rhythmSourceFile"),
+  rhythmSourceFileName: document.querySelector("#rhythmSourceFileName"),
+  rhythmSourceAssetSelect: document.querySelector("#rhythmSourceAssetSelect"),
+  loadRhythmSourceAssetButton: document.querySelector("#loadRhythmSourceAssetButton"),
+  uploadRhythmSourceButton: document.querySelector("#uploadRhythmSourceButton"),
+  rhythmSourceSummary: document.querySelector("#rhythmSourceSummary"),
+  rhythmPlaybackList: document.querySelector("#rhythmPlaybackList"),
+  rhythmSourceAudio: document.querySelector("#rhythmSourceAudio"),
+  rhythmTrackState: document.querySelector("#rhythmTrackState"),
+  rhythmTrackAssetSelect: document.querySelector("#rhythmTrackAssetSelect"),
+  addRhythmTrackButton: document.querySelector("#addRhythmTrackButton"),
+  rhythmChartReadout: document.querySelector("#rhythmChartReadout"),
+  rhythmSelectionState: document.querySelector("#rhythmSelectionState"),
+  rhythmViewMode: document.querySelector("#rhythmViewMode"),
+  rhythmActiveAnalysisSelect: document.querySelector("#rhythmActiveAnalysisSelect"),
+  rhythmCursorReadout: document.querySelector("#rhythmCursorReadout"),
+  rhythmRangeReadout: document.querySelector("#rhythmRangeReadout"),
+  rhythmChartScroller: document.querySelector("#rhythmChartScroller"),
+  rhythmChartStack: document.querySelector("#rhythmChartStack"),
+  rhythmAnalysisState: document.querySelector("#rhythmAnalysisState"),
+  rhythmExtractTrackName: document.querySelector("#rhythmExtractTrackName"),
+  rhythmExtractTrackLabel: document.querySelector("#rhythmExtractTrackLabel"),
+  rhythmExtractGuidanceScale: document.querySelector("#rhythmExtractGuidanceScale"),
+  runRhythmTrackExtractionButton: document.querySelector("#runRhythmTrackExtractionButton"),
+  rhythmAnalysisTarget: document.querySelector("#rhythmAnalysisTarget"),
+  rhythmAnalysisLabel: document.querySelector("#rhythmAnalysisLabel"),
+  rhythmWindowSize: document.querySelector("#rhythmWindowSize"),
+  rhythmHopSize: document.querySelector("#rhythmHopSize"),
+  rhythmSmoothingAlpha: document.querySelector("#rhythmSmoothingAlpha"),
+  rhythmMinStrength: document.querySelector("#rhythmMinStrength"),
+  rhythmMinProminence: document.querySelector("#rhythmMinProminence"),
+  rhythmMinDistanceSeconds: document.querySelector("#rhythmMinDistanceSeconds"),
+  runRhythmAnalysisButton: document.querySelector("#runRhythmAnalysisButton"),
+  rhythmAnalysisList: document.querySelector("#rhythmAnalysisList"),
+  rhythmMergeState: document.querySelector("#rhythmMergeState"),
+  rhythmSelectionLabel: document.querySelector("#rhythmSelectionLabel"),
+  saveRhythmSelectionButton: document.querySelector("#saveRhythmSelectionButton"),
+  rhythmSelectionList: document.querySelector("#rhythmSelectionList"),
+  rhythmMergeLabel: document.querySelector("#rhythmMergeLabel"),
+  mergeRhythmSelectionsButton: document.querySelector("#mergeRhythmSelectionsButton"),
+  finalizeRhythmMergeButton: document.querySelector("#finalizeRhythmMergeButton"),
+  rhythmMergeList: document.querySelector("#rhythmMergeList"),
+  rhythmAssetState: document.querySelector("#rhythmAssetState"),
+  rhythmLyricsModel: document.querySelector("#rhythmLyricsModel"),
+  rhythmLyricsLanguage: document.querySelector("#rhythmLyricsLanguage"),
+  extractRhythmLyricsButton: document.querySelector("#extractRhythmLyricsButton"),
+  rhythmLyricsText: document.querySelector("#rhythmLyricsText"),
+  saveRhythmLyricsButton: document.querySelector("#saveRhythmLyricsButton"),
+  saveRhythmProjectButton: document.querySelector("#saveRhythmProjectButton"),
+  rhythmAssetSummary: document.querySelector("#rhythmAssetSummary"),
+  rhythmAssetList: document.querySelector("#rhythmAssetList"),
+  rhythmVolumeLabel: document.querySelector("#rhythmVolumeLabel"),
+  createRhythmVolumeButton: document.querySelector("#createRhythmVolumeButton"),
+  rhythmVolumeList: document.querySelector("#rhythmVolumeList"),
   libraryState: document.querySelector("#libraryState"),
   libraryDetailState: document.querySelector("#libraryDetailState"),
   libraryIndexPath: document.querySelector("#libraryIndexPath"),
@@ -532,12 +612,23 @@ function renderStatus(status) {
 }
 
 function renderRuntime(runtime) {
-  const tone = runtime.api_running ? "ok" : runtime.installed ? "warn" : "error";
-  setPill(el.runtimeState, runtime.api_running ? "API running" : runtime.installed ? "Installed" : "Not installed", tone);
+  state.runtimeStatus = runtime;
+  const recovery = runtime.recovery || {};
+  const recovering = Boolean(recovery.active);
+  const tone = recovering ? "warn" : runtime.api_running ? "ok" : runtime.installed ? "warn" : "error";
+  const label = recovering
+    ? "Recovering"
+    : runtime.api_running
+      ? "API running"
+      : runtime.installed
+        ? "Installed"
+        : "Not installed";
+  setPill(el.runtimeState, label, tone);
   el.runtimeDetails.innerHTML = [
     `<strong>${runtime.message}</strong>`,
     `Install: ${runtime.install_dir}`,
     `API: ${runtime.api_url}`,
+    `Managed PID: ${runtime.managed_pid || "none"}${runtime.managed_pid ? ` (${runtime.managed_pid_alive ? "alive" : "not running"})` : ""}`,
     `uv: ${runtime.uv_available ? "available" : "missing"}`,
     `git: ${runtime.git_available ? "available" : "missing"}`,
     `Side-Step: ${runtime.side_step ? runtime.side_step.message : "Not checked"}`,
@@ -548,6 +639,27 @@ function renderRuntime(runtime) {
     el.lokrSidestepCommand.value = runtime.side_step_command;
   }
   el.copyRuntimeCommandButton.dataset.command = `${runtime.simple_setup_command}\n${runtime.simple_start_command}`;
+  applyAceRuntimeAvailability();
+}
+
+function aceRuntimeBusy() {
+  const runtime = state.runtimeStatus || {};
+  const recovery = runtime.recovery || {};
+  return Boolean(recovery.active);
+}
+
+function aceRuntimeReady() {
+  return Boolean(state.runtimeStatus && state.runtimeStatus.api_running);
+}
+
+function applyAceRuntimeAvailability() {
+  const busy = aceRuntimeBusy();
+  const ready = aceRuntimeReady();
+  const disableAceActions = busy || !ready;
+  el.generateButton.disabled = disableAceActions || state.isGenerating;
+  el.runExtractionButton.disabled = disableAceActions;
+  el.runMusicButton.disabled = disableAceActions;
+  el.runRhythmTrackExtractionButton.disabled = disableAceActions;
 }
 
 function renderLogs(logs) {
@@ -577,6 +689,7 @@ function setActivePage(page) {
   el.lokrTrainingPage.classList.toggle("active", page === "lokr");
   el.instrumentLabPage.classList.toggle("active", page === "instrument");
   el.audioEditPage.classList.toggle("active", page === "audioedit");
+  el.rhythmBeatPage.classList.toggle("active", page === "rhythm");
   el.libraryPage.classList.toggle("active", page === "library");
   el.transitionTabButton.classList.toggle("active", page === "transition");
   el.extractionTabButton.classList.toggle("active", page === "extraction");
@@ -585,9 +698,13 @@ function setActivePage(page) {
   el.lokrTrainingTabButton.classList.toggle("active", page === "lokr");
   el.instrumentLabTabButton.classList.toggle("active", page === "instrument");
   el.audioEditTabButton.classList.toggle("active", page === "audioedit");
+  el.rhythmBeatTabButton.classList.toggle("active", page === "rhythm");
   el.libraryTabButton.classList.toggle("active", page === "library");
   if (page === "instrument") {
     window.setTimeout(drawInstrumentPianoRoll, 50);
+  }
+  if (page === "rhythm") {
+    window.setTimeout(drawRhythmChart, 50);
   }
 }
 
@@ -725,6 +842,1693 @@ function filteredPublicLibraryItems() {
   });
 }
 
+function activeRhythmProject() {
+  return state.activeRhythmProject;
+}
+
+function rhythmBeatAssets() {
+  return (state.localLibraryItems || []).filter((item) => item.kind === "rhythm_game");
+}
+
+function rhythmBeatVolumeOptions() {
+  return [...(state.rhythmBeatVolumes || [])].sort((left, right) => Number(left.sort_order || 0) - Number(right.sort_order || 0) || String(left.label || "").localeCompare(String(right.label || "")));
+}
+
+function assignableRhythmVolumeOptions(selectedVolumeId = "") {
+  return rhythmBeatVolumeOptions().filter((volume) => !volume.official || volume.volume_id === selectedVolumeId);
+}
+
+function rhythmBeatVolumeLabel(volumeId) {
+  const volume = rhythmBeatVolumeOptions().find((item) => item.volume_id === volumeId);
+  return volume ? volume.label : "";
+}
+
+function rhythmAssetOptions() {
+  return (state.editorAssets || []).filter((asset) => {
+    const category = asset.category || "";
+    return ["extraction", "merge", "generation", "transition", "edit"].includes(category);
+  });
+}
+
+function rhythmSourceOptionLabel(item) {
+  return `${item.label || item.asset_id} (${item.category || "audio"})`;
+}
+
+function renderRhythmAssetSelectors() {
+  [el.rhythmSourceAssetSelect, el.rhythmTrackAssetSelect].forEach((select) => {
+    if (!select) return;
+    const current = select.value;
+    select.replaceChildren();
+    select.appendChild(option(select === el.rhythmSourceAssetSelect ? "Choose an existing creation" : "Choose an extraction or audio creation", ""));
+    rhythmAssetOptions().forEach((asset) => select.appendChild(option(rhythmSourceOptionLabel(asset), asset.asset_id)));
+    if (current && rhythmAssetOptions().some((asset) => asset.asset_id === current)) {
+      select.value = current;
+    }
+  });
+}
+
+function rhythmProjectAnalysisOptions(project) {
+  return project ? (project.analyses || []) : [];
+}
+
+function rhythmProjectMergeOptions(project) {
+  return project ? (project.merges || []) : [];
+}
+
+function renderRhythmProjects() {
+  el.rhythmProjectList.replaceChildren();
+  setPill(el.rhythmProjectState, state.rhythmBeatProjects.length ? `${state.rhythmBeatProjects.length} projects` : "No projects", state.rhythmBeatProjects.length ? "ok" : "neutral");
+  if (!state.rhythmBeatProjects.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No rhythm beat projects yet.";
+    el.rhythmProjectList.appendChild(empty);
+    return;
+  }
+  state.rhythmBeatProjects.forEach((project) => {
+    const row = document.createElement("article");
+    row.className = `generated-item${project.project_id === state.activeRhythmProjectId ? " active" : ""}`;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(project.label || project.project_id)}</strong>
+        <span>${project.final_result_id ? "Final ready" : "Draft"}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Source</dt><dd>${escapeHtml(project.source_label || "No source")}</dd>
+        <dt>Layers</dt><dd>${Number(project.track_count || 0)} tracks, ${Number(project.selection_count || 0)} selections</dd>
+        <dt>Updated</dt><dd>${escapeHtml(formatLibraryDate(project.updated_at || project.created_at))}</dd>
+      </dl>
+    `;
+    row.addEventListener("click", () => loadRhythmProject(project.project_id).catch((error) => showToast(error.message)));
+    el.rhythmProjectList.appendChild(row);
+  });
+}
+
+function rhythmAnalysisTargetOptions(project) {
+  const options = [{ value: "source", label: "Source song" }];
+  (project.tracks || []).forEach((track) => {
+    options.push({ value: `track:${track.track_id}`, label: track.label || track.track_id });
+  });
+  return options;
+}
+
+function syncVisibleRhythmAnalyses(project) {
+  const analysisIds = new Set((project?.analyses || []).map((analysis) => analysis.analysis_id));
+  state.visibleRhythmAnalysisIds = state.visibleRhythmAnalysisIds.filter((analysisId) => analysisIds.has(analysisId));
+  if (!state.visibleRhythmAnalysisIds.length && analysisIds.size) {
+    state.visibleRhythmAnalysisIds = [...analysisIds];
+  }
+}
+
+function rhythmPlaybackEntries(project) {
+  if (!project) return [];
+  const entries = [];
+  if (project.source && project.source.audio_path) {
+    entries.push({
+      playbackRef: "source",
+      kind: "source",
+      label: project.source.label || "Source song",
+      audioPath: project.source.audio_path,
+      durationSeconds: Number(project.source.duration_seconds || 0),
+      removable: false,
+    });
+  }
+  (project.tracks || []).forEach((track) => {
+    entries.push({
+      playbackRef: `track:${track.track_id}`,
+      trackId: track.track_id,
+      kind: "track",
+      label: track.label || track.track_id,
+      audioPath: track.audio_path || "",
+      durationSeconds: Number(track.duration_seconds || 0),
+      removable: true,
+      sourceCategory: track.source_category || "",
+    });
+  });
+  return entries;
+}
+
+function activeRhythmPlaybackEntry(project = activeRhythmProject()) {
+  const entries = rhythmPlaybackEntries(project);
+  return entries.find((entry) => entry.playbackRef === state.activeRhythmPlaybackRef) || entries[0] || null;
+}
+
+function syncRhythmPlaybackAudio(project = activeRhythmProject()) {
+  const entry = activeRhythmPlaybackEntry(project);
+  const currentSrc = el.rhythmSourceAudio.getAttribute("data-path") || "";
+  const nextSrc = entry?.audioPath || "";
+  if (nextSrc !== currentSrc) {
+    el.rhythmSourceAudio.pause();
+    el.rhythmSourceAudio.removeAttribute("src");
+    el.rhythmSourceAudio.removeAttribute("data-path");
+    if (nextSrc) {
+      el.rhythmSourceAudio.src = `/api/audio?path=${encodeURIComponent(nextSrc)}`;
+      el.rhythmSourceAudio.setAttribute("data-path", nextSrc);
+      el.rhythmSourceAudio.load();
+    }
+  }
+}
+
+function setRhythmPlaybackSource(playbackRef, options = {}) {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const entries = rhythmPlaybackEntries(project);
+  if (!entries.some((entry) => entry.playbackRef === playbackRef)) return;
+  const wasPlaying = !el.rhythmSourceAudio.paused;
+  state.activeRhythmPlaybackRef = playbackRef;
+  syncRhythmPlaybackAudio(project);
+  renderRhythmBeatLab();
+  if (options.autoplay || (options.preservePlayback && wasPlaying)) {
+    el.rhythmSourceAudio.play().catch(() => {});
+  }
+}
+
+function syncRhythmPlaybackSourceToAnalysis() {
+  const project = activeRhythmProject();
+  const analysis = currentRhythmAnalysis();
+  if (!project || !analysis) return;
+  if (analysis.source_type === "track" && analysis.source_ref) {
+    setRhythmPlaybackSource(`track:${analysis.source_ref}`);
+    return;
+  }
+  setRhythmPlaybackSource("source");
+}
+
+function updateRhythmExtractionLabelPlaceholder() {
+  const project = activeRhythmProject();
+  const sourceLabel = (project && project.source && project.source.audio_path)
+    ? ((project.source.audio_path.split(/[\\/]/).pop() || "source").replace(/\.[^.]+$/, "") || "source")
+    : "source";
+  const trackType = (el.rhythmExtractTrackName.value || "vocals").trim().toLowerCase() || "vocals";
+  el.rhythmExtractTrackLabel.placeholder = `${sourceLabel}_${trackType}`;
+}
+
+function renderRhythmPlaybackList(project) {
+  el.rhythmPlaybackList.replaceChildren();
+  const entries = rhythmPlaybackEntries(project);
+  const tracks = (project && project.tracks) || [];
+  setPill(el.rhythmTrackState, tracks.length ? `${tracks.length} tracks` : "0 tracks", tracks.length ? "ok" : "neutral");
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No source or extracted layers yet.";
+    el.rhythmPlaybackList.appendChild(empty);
+    return;
+  }
+  entries.forEach((entry) => {
+    const row = document.createElement("article");
+    row.className = `generated-item${entry.playbackRef === state.activeRhythmPlaybackRef ? " active" : ""}`;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(entry.label)}</strong>
+        <span>${entry.kind === "source" ? "Source" : "Layer"}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Duration</dt><dd>${Number(entry.durationSeconds || 0).toFixed(1)}s</dd>
+        <dt>Playback</dt><dd>${entry.playbackRef === state.activeRhythmPlaybackRef ? "Active in chart player" : "Available"}</dd>
+      </dl>
+      <div class="button-row generated-actions">
+        <button class="secondary-button rhythm-use-playback-button" type="button">${entry.playbackRef === state.activeRhythmPlaybackRef ? "Loaded" : "Load In Player"}</button>
+        ${entry.removable ? '<button class="secondary-button rhythm-remove-track-button" type="button">Remove</button>' : ""}
+      </div>
+    `;
+    row.querySelector(".rhythm-use-playback-button").addEventListener("click", () => {
+      setRhythmPlaybackSource(entry.playbackRef, { autoplay: true });
+    });
+    const removeButton = row.querySelector(".rhythm-remove-track-button");
+    if (removeButton && entry.trackId) {
+      removeButton.addEventListener("click", () => removeRhythmTrack(entry.trackId));
+    }
+    el.rhythmPlaybackList.appendChild(row);
+  });
+}
+
+function renderRhythmAnalysisList(project) {
+  el.rhythmAnalysisList.replaceChildren();
+  const analyses = rhythmProjectAnalysisOptions(project);
+  el.rhythmActiveAnalysisSelect.replaceChildren();
+  el.rhythmActiveAnalysisSelect.appendChild(option("Choose analysis", ""));
+  analyses.forEach((analysis) => {
+    el.rhythmActiveAnalysisSelect.appendChild(option(analysis.label || analysis.analysis_id, analysis.analysis_id));
+  });
+  if (state.selectedRhythmAnalysisId && analyses.some((analysis) => analysis.analysis_id === state.selectedRhythmAnalysisId)) {
+    el.rhythmActiveAnalysisSelect.value = state.selectedRhythmAnalysisId;
+  } else if (analyses.length) {
+    state.selectedRhythmAnalysisId = analyses[0].analysis_id;
+    el.rhythmActiveAnalysisSelect.value = analyses[0].analysis_id;
+  }
+  if (!analyses.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No saved analyses yet.";
+    el.rhythmAnalysisList.appendChild(empty);
+    return;
+  }
+  analyses.forEach((analysis) => {
+    const row = document.createElement("article");
+    row.className = `generated-item${analysis.analysis_id === state.selectedRhythmAnalysisId ? " active" : ""}`;
+    const visibleChecked = state.visibleRhythmAnalysisIds.includes(analysis.analysis_id) ? "checked" : "";
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(analysis.label || analysis.analysis_id)}</strong>
+        <span>${escapeHtml(analysis.source_label || analysis.source_ref || "Source")}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Beats</dt><dd>${Number((analysis.beat_points || []).length)} peaks</dd>
+        <dt>Events</dt><dd>${Number((analysis.source_events || []).length)} events</dd>
+      </dl>
+      <label class="merge-select"><input class="rhythm-analysis-visible-checkbox" type="checkbox" value="${escapeHtml(analysis.analysis_id)}" ${visibleChecked}/> Show on chart</label>
+    `;
+    row.addEventListener("click", () => {
+      state.selectedRhythmAnalysisId = analysis.analysis_id;
+      if (analysis.source_type === "track" && analysis.source_ref) {
+        state.activeRhythmPlaybackRef = `track:${analysis.source_ref}`;
+      } else {
+        state.activeRhythmPlaybackRef = "source";
+      }
+      renderRhythmBeatLab();
+    });
+    const visibleCheckbox = row.querySelector(".rhythm-analysis-visible-checkbox");
+    visibleCheckbox.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    visibleCheckbox.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const enabled = event.target.checked;
+      if (enabled) {
+        state.visibleRhythmAnalysisIds = [...new Set([...state.visibleRhythmAnalysisIds, analysis.analysis_id])];
+      } else {
+        state.visibleRhythmAnalysisIds = state.visibleRhythmAnalysisIds.filter((id) => id !== analysis.analysis_id);
+      }
+      renderRhythmBeatLab();
+    });
+    el.rhythmAnalysisList.appendChild(row);
+  });
+}
+
+function renderRhythmSelectionList(project) {
+  el.rhythmSelectionList.replaceChildren();
+  const selections = (project && project.selections) || [];
+  if (!selections.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No beat selections yet.";
+    el.rhythmSelectionList.appendChild(empty);
+    return;
+  }
+  selections.forEach((selection) => {
+    const row = document.createElement("article");
+    row.className = "generated-item";
+    const checked = state.selectedRhythmSelectionIds.includes(selection.selection_id) ? "checked" : "";
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(selection.label || selection.selection_id)}</strong>
+        <span>${escapeHtml(selection.source || "")}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Range</dt><dd>${formatTime(selection.range_start_seconds || 0)} to ${formatTime(selection.range_end_seconds || 0)}</dd>
+        <dt>Segments</dt><dd>${Number((selection.ranges || []).length || 1)}</dd>
+        <dt>Beats</dt><dd>${Number((selection.game_beats || []).length)}</dd>
+      </dl>
+      <div class="selection-segment-list">
+        ${((selection.ranges || []).length ? selection.ranges : [{ start_seconds: selection.range_start_seconds || 0, end_seconds: selection.range_end_seconds || 0 }]).map((range, index) => `
+          <div class="selection-segment-item">
+            <span>${formatTime(range.start_seconds || 0)} to ${formatTime(range.end_seconds || 0)}</span>
+            <button class="secondary-button rhythm-remove-saved-segment-button" type="button" data-segment-index="${index}">Remove Segment</button>
+          </div>
+        `).join("")}
+      </div>
+      <label class="merge-select"><input class="rhythm-selection-checkbox" type="checkbox" value="${escapeHtml(selection.selection_id)}" ${checked}/> Select for merge</label>
+      <div class="button-row generated-actions">
+        <button class="secondary-button rhythm-remove-selection-button" type="button">Remove</button>
+      </div>
+    `;
+    row.querySelector(".rhythm-selection-checkbox").addEventListener("change", (event) => {
+      const enabled = event.target.checked;
+      if (enabled) {
+        state.selectedRhythmSelectionIds = [...new Set([...state.selectedRhythmSelectionIds, selection.selection_id])];
+      } else {
+        state.selectedRhythmSelectionIds = state.selectedRhythmSelectionIds.filter((id) => id !== selection.selection_id);
+      }
+      updateRhythmCandidateActionLabel();
+    });
+    row.querySelector(".rhythm-remove-selection-button").addEventListener("click", () => {
+      removeRhythmSelection(selection.selection_id).catch((error) => showToast(error.message));
+    });
+    row.querySelectorAll(".rhythm-remove-saved-segment-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        removeSavedRhythmSelectionSegment(selection.selection_id, Number(button.dataset.segmentIndex || 0)).catch((error) => showToast(error.message));
+      });
+    });
+    el.rhythmSelectionList.appendChild(row);
+  });
+  updateRhythmCandidateActionLabel();
+}
+
+function renderRhythmMergeList(project) {
+  el.rhythmMergeList.replaceChildren();
+  const merges = rhythmProjectMergeOptions(project);
+  if (!(state.selectedRhythmMergeId && merges.some((merge) => merge.merge_id === state.selectedRhythmMergeId)) && merges.length) {
+    state.selectedRhythmMergeId = merges[0].merge_id;
+  }
+  if (!merges.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No merge candidates yet.";
+    el.rhythmMergeList.appendChild(empty);
+    return;
+  }
+  merges.forEach((merge) => {
+    const isSelected = merge.merge_id === state.selectedRhythmMergeId;
+    const isFinal = merge.merge_id === project.final_result_id;
+    const row = document.createElement("article");
+    row.className = `generated-item${isSelected ? " selected" : ""}${isFinal ? " active" : ""}`;
+    const status = [isSelected ? "Selected" : null, isFinal ? "Final" : "Candidate"].filter(Boolean).join(" · ");
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(merge.label || merge.merge_id)}</strong>
+        <span>${status}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Selections</dt><dd>${Number((merge.selection_ids || []).length)}</dd>
+        <dt>Beats</dt><dd>${Number((merge.game_beats || []).length)}</dd>
+      </dl>
+    `;
+    row.addEventListener("click", () => {
+      state.selectedRhythmMergeId = merge.merge_id;
+      renderRhythmBeatLab();
+    });
+    el.rhythmMergeList.appendChild(row);
+  });
+}
+
+function renderRhythmAssetList() {
+  if (!el.rhythmAssetList) return;
+  el.rhythmAssetList.replaceChildren();
+  const items = rhythmBeatAssets();
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No final rhythm beat assets yet.";
+    el.rhythmAssetList.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const metadata = item.metadata || {};
+    const volumeId = String(metadata.volume_id || "");
+    const volumeLabel = String(metadata.volume_label || rhythmBeatVolumeLabel(volumeId) || "");
+    const supportedModes = metadata.supported_game_modes || {};
+    const stepArrowsEnabled = supportedModes.step_arrows !== false;
+    const orbBeatEnabled = Boolean(supportedModes.orb_beat);
+    const laserShootEnabled = stepArrowsEnabled;
+    const modeLabels = [
+      stepArrowsEnabled ? "Arrows" : null,
+      orbBeatEnabled ? "Orb" : null,
+      laserShootEnabled ? "Laser" : null,
+    ].filter(Boolean);
+    const row = document.createElement("article");
+    row.className = "generated-item";
+    const publish = metadata.public_library || null;
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(item.title || item.id)}</strong>
+        <span>${publish && publish.remote_status === "published" ? "Published" : "Local"}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Selections</dt><dd>${escapeHtml(String(metadata.selection_count || 0))}</dd>
+        <dt>Merges</dt><dd>${escapeHtml(String(metadata.merge_count || 0))}</dd>
+        <dt>Game</dt><dd>${metadata.game_enabled ? "Enabled" : "Hidden"}</dd>
+        <dt>Volume</dt><dd>${escapeHtml(volumeLabel || "Unassigned")}</dd>
+        <dt>Modes</dt><dd>${escapeHtml(modeLabels.join(", ") || "None")}</dd>
+      </dl>
+      <div class="control-grid">
+        <label class="field">
+          <span>Game availability</span>
+          <select class="rhythm-asset-enabled" aria-label="Game availability">
+            <option value="true"${metadata.game_enabled ? " selected" : ""}>Enabled in games</option>
+            <option value="false"${!metadata.game_enabled ? " selected" : ""}>Private to library</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Volume</span>
+          <select class="rhythm-asset-volume" aria-label="Rhythm volume">
+            <option value="">No volume</option>
+            ${assignableRhythmVolumeOptions(volumeId).map((volume) => `<option value="${escapeHtml(volume.volume_id)}"${volume.volume_id === volumeId ? " selected" : ""}>${escapeHtml(volume.label)}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+      <div class="toggle-row rhythm-mode-toggle-row">
+        <label><input class="rhythm-asset-step-arrows" type="checkbox"${stepArrowsEnabled ? " checked" : ""} /> Step arrows</label>
+        <label><input class="rhythm-asset-orb-beat" type="checkbox"${orbBeatEnabled ? " checked" : ""} /> Orb beat</label>
+        <span class="mini-state">Laser shoot follows Step arrows</span>
+      </div>
+    `;
+    const updateSettings = () =>
+      updateRhythmGameAssetSettings(item.id, {
+        game_enabled: row.querySelector(".rhythm-asset-enabled").value === "true",
+        volume_id: row.querySelector(".rhythm-asset-volume").value || null,
+        step_arrows_enabled: row.querySelector(".rhythm-asset-step-arrows").checked,
+        orb_beat_enabled: row.querySelector(".rhythm-asset-orb-beat").checked,
+      }).catch((error) => showToast(error.message));
+    row.querySelector(".rhythm-asset-enabled").addEventListener("change", updateSettings);
+    row.querySelector(".rhythm-asset-volume").addEventListener("change", updateSettings);
+    row.querySelector(".rhythm-asset-step-arrows").addEventListener("change", updateSettings);
+    row.querySelector(".rhythm-asset-orb-beat").addEventListener("change", updateSettings);
+    el.rhythmAssetList.appendChild(row);
+  });
+}
+
+function renderRhythmVolumeList() {
+  if (!el.rhythmVolumeList) return;
+  el.rhythmVolumeList.replaceChildren();
+  const volumes = rhythmBeatVolumeOptions();
+  if (!volumes.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "No rhythm-game volumes yet.";
+    el.rhythmVolumeList.appendChild(empty);
+    return;
+  }
+  volumes.forEach((volume) => {
+    const row = document.createElement("article");
+    row.className = "generated-item";
+    row.innerHTML = `
+      <div class="generated-title">
+        <strong>${escapeHtml(volume.label || volume.volume_id)}</strong>
+        <span>${volume.official ? "Official" : "Custom"}</span>
+      </div>
+      <dl class="path-list compact-dl">
+        <dt>Slug</dt><dd>${escapeHtml(volume.slug || volume.volume_id)}</dd>
+        <dt>Order</dt><dd>${escapeHtml(String(volume.sort_order || 0))}</dd>
+      </dl>
+      ${volume.official ? "" : `
+        <div class="button-row generated-actions">
+          <input class="rhythm-volume-rename-input" type="text" value="${escapeHtml(volume.label || "")}" placeholder="Rename volume" />
+          <button class="secondary-button rhythm-volume-rename" type="button">Rename Volume</button>
+          <button class="secondary-button rhythm-volume-remove" type="button">Remove</button>
+        </div>
+      `}
+    `;
+    const renameButton = row.querySelector(".rhythm-volume-rename");
+    if (renameButton) {
+      renameButton.addEventListener("click", () => {
+        const input = row.querySelector(".rhythm-volume-rename-input");
+        const label = input ? input.value.trim() : "";
+        if (!label) {
+          showToast("Enter a volume name");
+          return;
+        }
+        runWithButtonBusyState(renameButton, "Renaming...", async () => {
+          const response = await api("/api/rhythm-beats/volumes", {
+            method: "POST",
+            body: JSON.stringify({ volume_id: volume.volume_id, label }),
+          });
+          state.rhythmBeatVolumes = response.volumes || [];
+          await refreshRhythmProjects();
+          await refreshLocalLibrary();
+          showToast("Rhythm-game volume renamed");
+        }).catch((error) => showToast(error.message));
+      });
+    }
+    const removeButton = row.querySelector(".rhythm-volume-remove");
+    if (removeButton) {
+      removeButton.addEventListener("click", () => {
+        runWithButtonBusyState(removeButton, "Removing...", () => removeRhythmVolume(volume.volume_id)).catch((error) => showToast(error.message));
+      });
+    }
+    el.rhythmVolumeList.appendChild(row);
+  });
+}
+
+function renderRhythmBeatLab() {
+  const project = activeRhythmProject();
+  renderRhythmProjects();
+  renderRhythmAssetSelectors();
+  renderRhythmVolumeList();
+  renderRhythmAssetList();
+  if (!project) {
+    el.rhythmProjectReadout.textContent = "No project selected";
+    el.rhythmSourceSummary.textContent = "Attach a song source first. Extracted tracks can then be layered into the project.";
+    el.rhythmChartReadout.textContent = "Select a project and run analysis.";
+    renderRhythmPlaybackList(null);
+    renderRhythmAnalysisList(null);
+    renderRhythmSelectionList(null);
+    renderRhythmMergeList(null);
+    updateRhythmCandidateActionLabel();
+    updateRhythmExtractionLabelPlaceholder();
+    drawRhythmChart();
+    return;
+  }
+  syncVisibleRhythmAnalyses(project);
+  el.rhythmProjectReadout.textContent = `${project.label} · ${project.source.label || "No source"} · ${formatLibraryDate(project.updated_at)}`;
+  el.rhythmSourceSummary.textContent = project.source.audio_path
+    ? `${project.source.label || "Source"} · ${Number(project.source.duration_seconds || 0).toFixed(1)}s`
+    : "Attach a song source first. Extracted tracks can then be layered into the project.";
+  if (!state.activeRhythmPlaybackRef || (state.activeRhythmPlaybackRef !== "source" && !(project.tracks || []).some((track) => `track:${track.track_id}` === state.activeRhythmPlaybackRef))) {
+    state.activeRhythmPlaybackRef = "source";
+  }
+  syncRhythmPlaybackAudio(project);
+  setPill(el.rhythmSourceState, project.source.audio_path ? "Ready" : "No source", project.source.audio_path ? "ok" : "neutral");
+  setPill(el.rhythmAssetState, project.final_result_id ? "Final ready" : "No final", project.final_result_id ? "ok" : "neutral");
+  el.rhythmLyricsText.value = (((project.lyrics || {}).text) || "");
+
+  el.rhythmAnalysisTarget.replaceChildren();
+  rhythmAnalysisTargetOptions(project).forEach((entry) => el.rhythmAnalysisTarget.appendChild(option(entry.label, entry.value)));
+  renderRhythmPlaybackList(project);
+  renderRhythmAnalysisList(project);
+  renderRhythmSelectionList(project);
+  renderRhythmMergeList(project);
+  updateRhythmCandidateActionLabel();
+  updateRhythmExtractionLabelPlaceholder();
+  drawRhythmChart();
+}
+
+function updateRhythmCandidateActionLabel() {
+  const count = state.selectedRhythmSelectionIds.length;
+  if (!el.mergeRhythmSelectionsButton) return;
+  if (count > 1) {
+    el.mergeRhythmSelectionsButton.textContent = "Merge Selected Layers Into Candidate";
+    return;
+  }
+  el.mergeRhythmSelectionsButton.textContent = "Create Candidate From Selected Layers";
+}
+
+async function runWithButtonBusyState(button, busyLabel, task, options = {}) {
+  if (!button) {
+    return task();
+  }
+  if (button.dataset.busy === "true") {
+    return null;
+  }
+  const restore = options.restore || (() => {});
+  const idleLabel = button.textContent;
+  button.dataset.busy = "true";
+  button.disabled = true;
+  if (busyLabel) {
+    button.textContent = busyLabel;
+  }
+  try {
+    return await task();
+  } finally {
+    button.dataset.busy = "false";
+    button.disabled = false;
+    button.textContent = idleLabel;
+    restore();
+  }
+}
+
+async function refreshRhythmProjects() {
+  state.rhythmBeatProjects = await api("/api/rhythm-beats/projects");
+  await refreshRhythmVolumes();
+  if (state.activeRhythmProjectId && !state.rhythmBeatProjects.some((project) => project.project_id === state.activeRhythmProjectId)) {
+    state.activeRhythmProjectId = null;
+    state.activeRhythmProject = null;
+  }
+  if (!state.activeRhythmProjectId && state.rhythmBeatProjects.length) {
+    await loadRhythmProject(state.rhythmBeatProjects[0].project_id, false);
+    return;
+  }
+  renderRhythmBeatLab();
+}
+
+async function loadRhythmProject(projectId, refreshList = true) {
+  const project = await api(`/api/rhythm-beats/projects/${encodeURIComponent(projectId)}`);
+  const previousProjectId = state.activeRhythmProjectId;
+  const previousVisibleIds = [...state.visibleRhythmAnalysisIds];
+  state.activeRhythmProjectId = project.project_id;
+  state.activeRhythmProject = project;
+  state.activeRhythmPlaybackRef = "source";
+  const analysisIds = (project.analyses || []).map((analysis) => analysis.analysis_id);
+  if (!analysisIds.includes(state.selectedRhythmAnalysisId)) {
+    state.selectedRhythmAnalysisId = analysisIds[0] || null;
+  }
+  if (previousProjectId === project.project_id) {
+    const validVisibleIds = previousVisibleIds.filter((analysisId) => analysisIds.includes(analysisId));
+    state.visibleRhythmAnalysisIds = validVisibleIds.length ? validVisibleIds : [...analysisIds];
+  } else {
+    state.visibleRhythmAnalysisIds = [...analysisIds];
+  }
+  state.selectedRhythmMergeId = (project.merges || [])[0]?.merge_id || null;
+  state.selectedRhythmSelectionIds = [];
+  state.rhythmSelectionDrafts = {};
+  state.selectedRhythmDraftSegmentIndices = {};
+  state.selectedRhythmSavedSegmentIndices = {};
+  state.rhythmSelectionPointer = null;
+  if (refreshList) {
+    state.rhythmBeatProjects = await api("/api/rhythm-beats/projects");
+    await refreshRhythmVolumes();
+  }
+  renderRhythmBeatLab();
+}
+
+async function refreshRhythmVolumes() {
+  const volumeResponse = await api("/api/rhythm-beats/volumes");
+  state.rhythmBeatVolumes = volumeResponse.volumes || [];
+  return state.rhythmBeatVolumes;
+}
+
+async function saveRhythmProject(showSavedToast = false) {
+  const project = activeRhythmProject();
+  if (!project) {
+    showToast("Create or load a rhythm beat project");
+    return null;
+  }
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ project }),
+  });
+  state.activeRhythmProject = response.project;
+  state.activeRhythmProjectId = response.project.project_id;
+  state.rhythmBeatProjects = await api("/api/rhythm-beats/projects");
+  await refreshLocalLibrary();
+  renderRhythmBeatLab();
+  if (showSavedToast) showToast("Rhythm beat project saved");
+  return response.project;
+}
+
+async function createRhythmVolume() {
+  const label = (el.rhythmVolumeLabel && el.rhythmVolumeLabel.value.trim()) || "";
+  if (!label) {
+    showToast("Enter a volume name");
+    return;
+  }
+  const response = await api("/api/rhythm-beats/volumes", {
+    method: "POST",
+    body: JSON.stringify({ label }),
+  });
+  state.rhythmBeatVolumes = response.volumes || [];
+  if (el.rhythmVolumeLabel) {
+    el.rhythmVolumeLabel.value = "";
+  }
+  renderRhythmBeatLab();
+  showToast("Rhythm-game volume saved");
+}
+
+async function removeRhythmVolume(volumeId) {
+  const response = await api(`/api/rhythm-beats/volumes/${encodeURIComponent(volumeId)}`, {
+    method: "DELETE",
+  });
+  state.rhythmBeatVolumes = response.volumes || [];
+  await refreshRhythmProjects();
+  showToast("Rhythm-game volume removed");
+}
+
+async function updateRhythmGameAssetSettings(projectId, payload) {
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(projectId)}/game-asset`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+  if (response.project && state.activeRhythmProjectId === response.project.project_id) {
+    state.activeRhythmProject = response.project;
+  }
+  if (response.volumes) {
+    state.rhythmBeatVolumes = response.volumes;
+  }
+  await refreshLocalLibrary();
+  await refreshRhythmProjects();
+  showToast("Rhythm-game asset updated");
+}
+
+function currentRhythmAnalysis() {
+  const project = activeRhythmProject();
+  if (!project) return null;
+  return (project.analyses || []).find((analysis) => analysis.analysis_id === state.selectedRhythmAnalysisId) || null;
+}
+
+function currentRhythmMerge() {
+  const project = activeRhythmProject();
+  if (!project) return null;
+  return (project.merges || []).find((merge) => merge.merge_id === state.selectedRhythmMergeId) || null;
+}
+
+function activeRhythmSelectionDraft() {
+  const analysis = currentRhythmAnalysis();
+  if (!analysis) return null;
+  return state.rhythmSelectionDrafts[analysis.analysis_id] || null;
+}
+
+function rhythmDisplayDuration() {
+  const project = activeRhythmProject();
+  return Number((project && project.source && project.source.duration_seconds) || 0);
+}
+
+function rhythmChartMetrics() {
+  const duration = Math.max(1, rhythmDisplayDuration());
+  const width = Math.max(1400, Math.ceil(duration * 48));
+  const height = 118;
+  return { duration, width, height, left: 16, right: 16, top: 12, bottom: 16 };
+}
+
+function rhythmClientXToTime(clientX) {
+  const scroller = el.rhythmChartScroller;
+  const rect = scroller.getBoundingClientRect();
+  const metrics = rhythmChartMetrics();
+  const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+  const chartX = scroller.scrollLeft + localX;
+  return rhythmXToTime(chartX, metrics);
+}
+
+function maybeAutoScrollRhythmChart(clientX) {
+  const scroller = el.rhythmChartScroller;
+  const rect = scroller.getBoundingClientRect();
+  const edgeThreshold = 40;
+  const scrollStep = 20;
+  if (clientX < rect.left + edgeThreshold) {
+    scroller.scrollLeft = Math.max(0, scroller.scrollLeft - scrollStep);
+    return;
+  }
+  if (clientX > rect.right - edgeThreshold) {
+    scroller.scrollLeft = Math.min(scroller.scrollWidth - scroller.clientWidth, scroller.scrollLeft + scrollStep);
+  }
+}
+
+function rhythmChartRows(project) {
+  const rows = [];
+  const analyses = (project?.analyses || []).filter((analysis) => state.visibleRhythmAnalysisIds.includes(analysis.analysis_id));
+  analyses.forEach((analysis) => {
+    rows.push({
+      rowId: `analysis:${analysis.analysis_id}`,
+      type: "analysis",
+      label: analysis.label || analysis.source_label || "Analysis",
+      subtitle: analysis.source_label || analysis.source_ref || "Source",
+      analysis,
+    });
+  });
+  (project?.selections || []).forEach((selection) => {
+    rows.push({
+      rowId: `selection:${selection.selection_id}`,
+      type: "selection",
+      label: selection.label || selection.selection_id,
+      subtitle: selection.source || "",
+      selection,
+    });
+  });
+  const selectedMerge = currentRhythmMerge();
+  if (selectedMerge) {
+    rows.push({
+      rowId: `merge:${selectedMerge.merge_id}`,
+      type: "merge",
+      label: selectedMerge.label || selectedMerge.merge_id,
+      subtitle: selectedMerge.merge_id === project?.final_result_id ? "Selected merge · Final candidate" : "Selected merge candidate",
+      merge: selectedMerge,
+      isFinal: selectedMerge.merge_id === project?.final_result_id,
+    });
+  }
+  const finalMerge = project?.final_result_id
+    ? (project?.merges || []).find((merge) => merge.merge_id === project.final_result_id)
+    : null;
+  if (el.rhythmViewMode.value === "final" && finalMerge && finalMerge.merge_id !== selectedMerge?.merge_id) {
+    rows.push({
+      rowId: `merge-final:${finalMerge.merge_id}`,
+      type: "merge",
+      label: finalMerge.label || finalMerge.merge_id,
+      subtitle: "Final candidate",
+      merge: finalMerge,
+      isFinal: true,
+    });
+  }
+  return rows;
+}
+
+function rhythmTimeToX(timeSeconds, metrics) {
+  const usable = metrics.width - metrics.left - metrics.right;
+  return metrics.left + (Math.max(0, Math.min(metrics.duration, timeSeconds)) / metrics.duration) * usable;
+}
+
+function rhythmXToTime(x, metrics) {
+  const usable = metrics.width - metrics.left - metrics.right;
+  const ratio = Math.max(0, Math.min(1, (x - metrics.left) / usable));
+  return ratio * metrics.duration;
+}
+
+function drawRhythmChart() {
+  const project = activeRhythmProject();
+  const playbackEntry = activeRhythmPlaybackEntry(project);
+  const metrics = rhythmChartMetrics();
+  el.rhythmChartStack.style.width = `${metrics.width + 20}px`;
+  el.rhythmChartStack.replaceChildren();
+  const rows = rhythmChartRows(project);
+  const analysis = currentRhythmAnalysis();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-result";
+    empty.textContent = "Run analysis to start beat authoring.";
+    el.rhythmChartStack.appendChild(empty);
+    return;
+  }
+  const ns = "http://www.w3.org/2000/svg";
+  rows.forEach((row) => {
+    const container = document.createElement("section");
+    container.className = "rhythm-chart-row";
+    container.dataset.rowType = row.type;
+    if (row.analysis) container.dataset.analysisId = row.analysis.analysis_id;
+    if (row.merge) container.dataset.mergeId = row.merge.merge_id;
+    if (row.isFinal) container.dataset.final = "true";
+
+    const header = document.createElement("div");
+    header.className = "rhythm-chart-row-header";
+    header.innerHTML = `
+      <strong>${escapeHtml(row.label)}</strong>
+      <span>${escapeHtml(row.subtitle)}</span>
+    `;
+    container.appendChild(header);
+
+    const actionRail = document.createElement("div");
+    actionRail.className = "rhythm-chart-row-actions";
+    container.appendChild(actionRail);
+
+    const track = document.createElement("div");
+    track.className = "rhythm-chart-row-track";
+    track.style.width = `${metrics.width}px`;
+    const svg = document.createElementNS(ns, "svg");
+    svg.classList.add("rhythm-chart-svg");
+    if (row.analysis) svg.dataset.analysisId = row.analysis.analysis_id;
+    svg.setAttribute("viewBox", `0 0 ${metrics.width} ${metrics.height}`);
+    svg.style.width = `${metrics.width}px`;
+    svg.style.height = `${metrics.height}px`;
+
+    for (let second = 0; second <= metrics.duration; second += 1) {
+      const line = document.createElementNS(ns, "line");
+      const x = rhythmTimeToX(second, metrics);
+      line.setAttribute("x1", String(x));
+      line.setAttribute("x2", String(x));
+      line.setAttribute("y1", String(metrics.top));
+      line.setAttribute("y2", String(metrics.height - metrics.bottom));
+      line.setAttribute("stroke", second % 4 === 0 ? "#323741" : "rgba(50,55,65,0.45)");
+      line.setAttribute("stroke-width", second % 4 === 0 ? "1.5" : "1");
+      svg.appendChild(line);
+    }
+
+    const baseLine = document.createElementNS(ns, "line");
+    baseLine.setAttribute("x1", String(metrics.left));
+    baseLine.setAttribute("x2", String(metrics.width - metrics.right));
+    baseLine.setAttribute("y1", String(metrics.height - metrics.bottom));
+    baseLine.setAttribute("y2", String(metrics.height - metrics.bottom));
+    baseLine.setAttribute("stroke", "#323741");
+    svg.appendChild(baseLine);
+
+    if (row.type === "analysis" && row.analysis) {
+      (row.analysis.beat_points || []).forEach((beat) => {
+        const bar = document.createElementNS(ns, "line");
+        const x = rhythmTimeToX(Number(beat.timeSeconds || 0), metrics);
+        const strength = Math.max(0.12, Number(beat.strength || 0));
+        bar.setAttribute("x1", String(x));
+        bar.setAttribute("x2", String(x));
+        bar.setAttribute("y1", String(metrics.height - metrics.bottom));
+        bar.setAttribute("y2", String(metrics.height - metrics.bottom - strength * (metrics.height - metrics.top - metrics.bottom - 8)));
+        bar.setAttribute("stroke", "#2dd4bf");
+        bar.setAttribute("stroke-width", "2");
+        svg.appendChild(bar);
+      });
+    } else if (row.selection) {
+      const savedRanges = row.selection.ranges || [{ start_seconds: row.selection.range_start_seconds || 0, end_seconds: row.selection.range_end_seconds || 0 }];
+      const selectedSavedIndex = state.selectedRhythmSavedSegmentIndices[row.selection.selection_id] ?? -1;
+      if (selectedSavedIndex >= 0 && selectedSavedIndex < savedRanges.length) {
+        const clearButton = document.createElement("button");
+        clearButton.type = "button";
+        clearButton.className = "secondary-button rhythm-clear-draft-segment-button";
+        clearButton.textContent = "Clear Segment";
+        clearButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          removeSavedRhythmSelectionSegment(row.selection.selection_id, selectedSavedIndex).catch((error) => showToast(error.message));
+        });
+        actionRail.appendChild(clearButton);
+      }
+      savedRanges.forEach((range, rangeIndex) => {
+        const overlay = document.createElementNS(ns, "rect");
+        overlay.setAttribute("x", String(rhythmTimeToX(range.start_seconds || 0, metrics)));
+        overlay.setAttribute("y", String(metrics.top));
+        overlay.setAttribute("width", String(Math.max(6, rhythmTimeToX(range.end_seconds || 0, metrics) - rhythmTimeToX(range.start_seconds || 0, metrics))));
+        overlay.setAttribute("height", String(metrics.height - metrics.top - metrics.bottom));
+        overlay.setAttribute("fill", selectedSavedIndex === rangeIndex ? "rgba(242,184,75,0.26)" : "rgba(242,184,75,0.16)");
+        overlay.setAttribute("stroke", selectedSavedIndex === rangeIndex ? "#fde68a" : "#f2b84b");
+        overlay.setAttribute("stroke-width", selectedSavedIndex === rangeIndex ? "2" : "1");
+        overlay.setAttribute("rx", "4");
+        overlay.classList.add("rhythm-saved-segment");
+        overlay.dataset.selectionId = row.selection.selection_id;
+        overlay.dataset.segmentIndex = String(rangeIndex);
+        svg.appendChild(overlay);
+      });
+      (row.selection.game_beats || []).forEach((beat) => {
+        const dot = document.createElementNS(ns, "circle");
+        dot.setAttribute("cx", String(rhythmTimeToX(Number(beat.timeSeconds || 0), metrics)));
+        dot.setAttribute("cy", String((metrics.top + metrics.height - metrics.bottom) / 2));
+        dot.setAttribute("r", "3");
+        dot.setAttribute("fill", "#f2b84b");
+        svg.appendChild(dot);
+      });
+    } else if (row.type === "merge" && row.merge) {
+      (row.merge.game_beats || []).forEach((beat) => {
+        const line = document.createElementNS(ns, "line");
+        const x = rhythmTimeToX(Number(beat.timeSeconds || 0), metrics);
+        const strength = Math.max(0.12, Number(beat.strength || 0));
+        line.setAttribute("x1", String(x));
+        line.setAttribute("x2", String(x));
+        line.setAttribute("y1", String(metrics.height - metrics.bottom));
+        line.setAttribute("y2", String(metrics.height - metrics.bottom - strength * (metrics.height - metrics.top - metrics.bottom - 8)));
+        line.setAttribute("stroke", row.isFinal ? "#86efac" : "#60a5fa");
+        line.setAttribute("stroke-width", row.isFinal ? "2.5" : "2");
+        svg.appendChild(line);
+      });
+    }
+
+    const rowDraft = row.analysis ? state.rhythmSelectionDrafts[row.analysis.analysis_id] : null;
+    if (rowDraft && row.analysis) {
+      const activeDraftRanges = rowDraft.ranges || [];
+      const selectedDraftIndex = state.selectedRhythmDraftSegmentIndices[row.analysis.analysis_id] ?? -1;
+      if (selectedDraftIndex >= 0 && selectedDraftIndex < activeDraftRanges.length) {
+        const clearButton = document.createElement("button");
+        clearButton.type = "button";
+        clearButton.className = "secondary-button rhythm-clear-draft-segment-button";
+        clearButton.textContent = "Clear Segment";
+        clearButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          removeRhythmDraftSegment(row.analysis.analysis_id, selectedDraftIndex);
+        });
+        actionRail.appendChild(clearButton);
+      }
+      activeDraftRanges.forEach((range) => {
+        const rect = document.createElementNS(ns, "rect");
+        const start = Math.min(range.startSeconds, range.endSeconds);
+        const end = Math.max(range.startSeconds, range.endSeconds);
+        const rangeIndex = activeDraftRanges.indexOf(range);
+        rect.setAttribute("x", String(rhythmTimeToX(start, metrics)));
+        rect.setAttribute("y", String(metrics.top));
+        rect.setAttribute("width", String(Math.max(4, rhythmTimeToX(end, metrics) - rhythmTimeToX(start, metrics))));
+        rect.setAttribute("height", String(metrics.height - metrics.top - metrics.bottom));
+        rect.setAttribute("fill", selectedDraftIndex === rangeIndex ? "rgba(45,212,191,0.22)" : "rgba(45,212,191,0.12)");
+        rect.setAttribute("stroke", selectedDraftIndex === rangeIndex ? "#86efac" : "#2dd4bf");
+        rect.setAttribute("stroke-width", selectedDraftIndex === rangeIndex ? "2" : "1");
+        rect.classList.add("rhythm-draft-segment");
+        rect.dataset.analysisId = row.analysis.analysis_id;
+        rect.dataset.segmentIndex = String(rangeIndex);
+        svg.appendChild(rect);
+      });
+    }
+
+    const audio = el.rhythmSourceAudio;
+    if (audio && Number.isFinite(audio.currentTime)) {
+      const cursor = document.createElementNS(ns, "line");
+      const x = rhythmTimeToX(Math.min(metrics.duration, audio.currentTime || 0), metrics);
+      cursor.setAttribute("x1", String(x));
+      cursor.setAttribute("x2", String(x));
+      cursor.setAttribute("y1", String(metrics.top));
+      cursor.setAttribute("y2", String(metrics.height - metrics.bottom));
+      cursor.setAttribute("stroke", "#f87171");
+      cursor.setAttribute("stroke-width", "2");
+      svg.appendChild(cursor);
+      el.rhythmCursorReadout.textContent = formatTime(audio.currentTime || 0);
+    }
+
+    track.appendChild(svg);
+    container.appendChild(track);
+    el.rhythmChartStack.appendChild(container);
+  });
+
+  const activeDraft = activeRhythmSelectionDraft();
+  if (activeDraft) {
+    const ranges = activeDraft.ranges || [];
+    const starts = ranges.map((range) => Math.min(range.startSeconds, range.endSeconds));
+    const ends = ranges.map((range) => Math.max(range.startSeconds, range.endSeconds));
+    if (ranges.length) {
+      el.rhythmRangeReadout.textContent = `${ranges.length} segments · ${formatTime(Math.min(...starts))} to ${formatTime(Math.max(...ends))}`;
+    } else {
+      el.rhythmRangeReadout.textContent = "No selected range";
+    }
+  } else {
+    el.rhythmRangeReadout.textContent = "No selected range";
+  }
+  if (project) {
+    const analysis = currentRhythmAnalysis();
+    const playbackLabel = playbackEntry ? playbackEntry.label : "No playback source";
+    const analysisLabel = analysis ? (analysis.label || analysis.source_label || "Analysis") : "No analysis";
+    const merge = currentRhythmMerge();
+    const mergeLabel = merge ? (merge.label || merge.merge_id) : "No candidate selected";
+    el.rhythmChartReadout.textContent = `${analysisLabel} · Player: ${playbackLabel} · Candidate: ${mergeLabel}`;
+  }
+}
+
+async function createRhythmProject() {
+  const response = await api("/api/rhythm-beats/projects", {
+    method: "POST",
+    body: JSON.stringify({ label: el.rhythmProjectLabel.value.trim() || "New rhythm beat project" }),
+  });
+  state.activeRhythmProject = response.project;
+  state.activeRhythmProjectId = response.project.project_id;
+  showToast("Rhythm beat project created");
+  await refreshRhythmProjects();
+}
+
+async function uploadRhythmSource() {
+  const project = activeRhythmProject();
+  const file = el.rhythmSourceFile.files && el.rhythmSourceFile.files[0];
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!file) {
+    showToast("Choose an audio file");
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/source/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(body && body.detail ? body.detail : `Upload failed: ${response.status}`);
+  state.activeRhythmProject = body.project;
+  state.activeRhythmPlaybackRef = "source";
+  showToast("Rhythm source attached");
+  await refreshRhythmProjects();
+}
+
+async function attachRhythmSourceAsset() {
+  const project = activeRhythmProject();
+  const assetId = el.rhythmSourceAssetSelect.value;
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!assetId) {
+    showToast("Choose an existing creation");
+    return;
+  }
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/source/asset`, {
+    method: "POST",
+    body: JSON.stringify({ asset_id: assetId }),
+  });
+  state.activeRhythmProject = response.project;
+  state.activeRhythmPlaybackRef = "source";
+  showToast("Source creation attached");
+  await refreshRhythmProjects();
+}
+
+async function addRhythmTrack() {
+  const project = activeRhythmProject();
+  const assetId = el.rhythmTrackAssetSelect.value;
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!assetId) {
+    showToast("Choose an existing creation");
+    return;
+  }
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/tracks/asset`, {
+    method: "POST",
+    body: JSON.stringify({ asset_id: assetId }),
+  });
+  state.activeRhythmProject = response.project;
+  showToast("Linked track added");
+  await refreshRhythmProjects();
+}
+
+async function removeRhythmTrack(trackId) {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/tracks/${encodeURIComponent(trackId)}`, {
+    method: "DELETE",
+  });
+  state.activeRhythmProject = response.project;
+  if (state.activeRhythmPlaybackRef === `track:${trackId}`) {
+    state.activeRhythmPlaybackRef = "source";
+  }
+  showToast("Linked track removed");
+  await refreshRhythmProjects();
+}
+
+async function removeRhythmSelection(selectionId) {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/selections/${encodeURIComponent(selectionId)}`, {
+    method: "DELETE",
+  });
+  state.activeRhythmProject = response.project;
+  state.selectedRhythmSelectionIds = state.selectedRhythmSelectionIds.filter((id) => id !== selectionId);
+  showToast("Saved selection removed");
+  await refreshRhythmProjects();
+}
+
+function removeRhythmDraftSegment(analysisId, segmentIndex) {
+  const draft = state.rhythmSelectionDrafts[analysisId];
+  if (!draft) return;
+  draft.ranges = (draft.ranges || []).filter((_, index) => index !== segmentIndex);
+  if (!draft.ranges.length) {
+    delete state.rhythmSelectionDrafts[analysisId];
+    delete state.selectedRhythmDraftSegmentIndices[analysisId];
+  } else if ((state.selectedRhythmDraftSegmentIndices[analysisId] ?? -1) >= draft.ranges.length) {
+    state.selectedRhythmDraftSegmentIndices[analysisId] = draft.ranges.length - 1;
+  }
+  drawRhythmChart();
+}
+
+function selectRhythmDraftSegment(analysisId, segmentIndex) {
+  state.selectedRhythmDraftSegmentIndices[analysisId] = segmentIndex;
+  drawRhythmChart();
+}
+
+function selectRhythmSavedSegment(selectionId, segmentIndex) {
+  state.selectedRhythmSavedSegmentIndices[selectionId] = segmentIndex;
+  drawRhythmChart();
+}
+
+async function removeSavedRhythmSelectionSegment(selectionId, segmentIndex) {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const selections = [...(project.selections || [])];
+  const selectionIndex = selections.findIndex((selection) => selection.selection_id === selectionId);
+  if (selectionIndex < 0) return;
+  const selection = { ...selections[selectionIndex] };
+  const ranges = [...((selection.ranges || []).map((range) => ({ ...range })))];
+  if (!ranges.length) return;
+  selection.ranges = ranges.filter((_, index) => index !== segmentIndex);
+  if (!selection.ranges.length) {
+    selections.splice(selectionIndex, 1);
+    project.selections = selections;
+    delete state.selectedRhythmSavedSegmentIndices[selectionId];
+    await saveRhythmProject();
+    showToast("Saved selection removed");
+    return;
+  }
+  const analysis = (project.analyses || []).find((item) => item.analysis_id === selection.analysis_id);
+  if (analysis) {
+    selection.game_beats = (analysis.beat_points || []).filter((beat) => {
+      const time = Number(beat.timeSeconds || 0);
+      return selection.ranges.some((range) => time >= Number(range.start_seconds || 0) && time <= Number(range.end_seconds || 0));
+    });
+    selection.game_notes = (analysis.source_events || []).filter((event) => {
+      const start = Number(event.startSeconds || 0);
+      const end = Number(event.endSeconds || 0);
+      return selection.ranges.some((range) => end >= Number(range.start_seconds || 0) && start <= Number(range.end_seconds || 0));
+    });
+  }
+  selection.range_start_seconds = Math.min(...selection.ranges.map((range) => Number(range.start_seconds || 0)));
+  selection.range_end_seconds = Math.max(...selection.ranges.map((range) => Number(range.end_seconds || 0)));
+  selection.game_beat_selections = (selection.game_beat_selections || []).filter((_, index) => index !== segmentIndex);
+  const nextSelectedIndex = state.selectedRhythmSavedSegmentIndices[selectionId] ?? -1;
+  if (nextSelectedIndex >= selection.ranges.length) {
+    state.selectedRhythmSavedSegmentIndices[selectionId] = selection.ranges.length - 1;
+  }
+  selections[selectionIndex] = selection;
+  project.selections = selections;
+  await saveRhythmProject();
+  showToast("Selection segment removed");
+}
+
+function rhythmAnalysisConfig() {
+  return {
+    windowSize: numericValue(el.rhythmWindowSize) ?? 2048,
+    hopSize: numericValue(el.rhythmHopSize) ?? 512,
+    smoothingAlpha: numericValue(el.rhythmSmoothingAlpha) ?? 0.35,
+    minStrength: numericValue(el.rhythmMinStrength) ?? 0.16,
+    minProminence: numericValue(el.rhythmMinProminence) ?? 0.05,
+    minDistanceSeconds: numericValue(el.rhythmMinDistanceSeconds) ?? 0.22,
+  };
+}
+
+function mixToMono(channelDataList, length) {
+  const mono = new Float32Array(length);
+  channelDataList.forEach((channel) => {
+    for (let index = 0; index < length; index += 1) {
+      mono[index] += channel[index] / channelDataList.length;
+    }
+  });
+  return mono;
+}
+
+function extractBeatDataFromSamples(monoSamples, sampleRate, config) {
+  if (!monoSamples.length || sampleRate <= 0) return [];
+  const windowSize = Math.max(1, Math.floor(config.windowSize || 2048));
+  const hopSize = Math.max(1, Math.floor(config.hopSize || 512));
+  const alpha = Math.max(0, Math.min(1, Number(config.smoothingAlpha ?? 0.35)));
+  if (monoSamples.length < windowSize) return [];
+  const points = [];
+  for (let start = 0; start + windowSize <= monoSamples.length; start += hopSize) {
+    let sumSquares = 0;
+    for (let index = start; index < start + windowSize; index += 1) {
+      const sample = monoSamples[index];
+      sumSquares += sample * sample;
+    }
+    points.push({ timeSeconds: start / sampleRate, strength: Math.sqrt(sumSquares / windowSize) });
+  }
+  let smoothed = points[0] ? points[0].strength : 0;
+  for (let index = 1; index < points.length; index += 1) {
+    smoothed = alpha * points[index].strength + (1 - alpha) * smoothed;
+    points[index].strength = smoothed;
+  }
+  const maxStrength = points.reduce((max, point) => Math.max(max, point.strength), 0);
+  return points.map((point) => ({ ...point, strength: maxStrength ? Math.max(0, Math.min(1, point.strength / maxStrength)) : 0 }));
+}
+
+function movingAverage(values, windowSize) {
+  const safeWindow = Math.max(1, Math.floor(windowSize));
+  const radius = Math.floor(safeWindow / 2);
+  if (safeWindow <= 1 || values.length <= 2) return [...values];
+  const smoothed = new Array(values.length).fill(0);
+  for (let index = 0; index < values.length; index += 1) {
+    const from = Math.max(0, index - radius);
+    const to = Math.min(values.length - 1, index + radius);
+    let sum = 0;
+    let count = 0;
+    for (let inner = from; inner <= to; inner += 1) {
+      sum += values[inner];
+      count += 1;
+    }
+    smoothed[index] = count ? sum / count : values[index];
+  }
+  return smoothed;
+}
+
+function approximateProminence(series, index, neighborhood) {
+  const from = Math.max(0, index - neighborhood);
+  const to = Math.min(series.length - 1, index + neighborhood);
+  let leftMin = series[index];
+  let rightMin = series[index];
+  for (let pointer = from; pointer <= index; pointer += 1) leftMin = Math.min(leftMin, series[pointer]);
+  for (let pointer = index; pointer <= to; pointer += 1) rightMin = Math.min(rightMin, series[pointer]);
+  return Math.max(0, series[index] - Math.max(leftMin, rightMin));
+}
+
+function findZeroSlopePeakIndices(points, config = {}) {
+  if (!points.length || points.length < 3) return [];
+  const raw = points.map((point) => Number(point.strength || 0));
+  const smooth = movingAverage(raw, 3);
+  const minStrength = Math.max(0, Math.min(1, Number(config.minStrength ?? 0.16)));
+  const minProminence = Math.max(0, Math.min(1, Number(config.minProminence ?? 0.05)));
+  const minDistancePoints = Math.max(1, Math.floor(config.minDistancePoints || 3));
+  const neighborhood = Math.max(2, minDistancePoints);
+  const candidates = [];
+  for (let index = 1; index < smooth.length - 1; index += 1) {
+    const slopePrev = smooth[index] - smooth[index - 1];
+    const slopeNext = smooth[index + 1] - smooth[index];
+    if (!(slopePrev > 0 && slopeNext <= 0)) continue;
+    if (smooth[index] < minStrength) continue;
+    const prominence = approximateProminence(smooth, index, neighborhood);
+    if (prominence < minProminence) continue;
+    candidates.push({ index, strength: smooth[index] + prominence * 0.5 });
+  }
+  const byStrength = [...candidates].sort((left, right) => right.strength - left.strength);
+  const accepted = [];
+  byStrength.forEach((candidate) => {
+    if (!accepted.some((row) => Math.abs(row.index - candidate.index) < minDistancePoints)) accepted.push(candidate);
+  });
+  return accepted.map((row) => row.index).sort((left, right) => left - right);
+}
+
+async function decodeRhythmAudio(path) {
+  const cacheKey = String(path || "");
+  if (state.rhythmAnalysisCache.has(cacheKey)) return state.rhythmAnalysisCache.get(cacheKey);
+  const response = await fetch(`/api/audio?path=${encodeURIComponent(path)}`);
+  if (!response.ok) throw new Error(`Could not load audio: ${response.status}`);
+  const bytes = await response.arrayBuffer();
+  const context = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const buffer = await context.decodeAudioData(bytes.slice(0));
+    state.rhythmAnalysisCache.set(cacheKey, buffer);
+    return buffer;
+  } finally {
+    await context.close();
+  }
+}
+
+function analysisSourceForProject(project, targetValue) {
+  if (targetValue === "source") {
+    return {
+      sourceType: "source",
+      sourceRef: "source",
+      sourceLabel: (project.source || {}).label || "Source song",
+      audioPath: (project.source || {}).audio_path || "",
+    };
+  }
+  const trackId = String(targetValue || "").replace(/^track:/, "");
+  const track = (project.tracks || []).find((item) => item.track_id === trackId);
+  if (!track) throw new Error("Selected rhythm track was not found");
+  return {
+    sourceType: "track",
+    sourceRef: track.track_id,
+    sourceLabel: track.label || track.track_id,
+    audioPath: track.audio_path || "",
+  };
+}
+
+function sourceEventsFromPeaks(points, indices, sourceLabel) {
+  return indices.map((index, order) => {
+    const point = points[index];
+    const nextPoint = points[indices[order + 1]] || null;
+    const startSeconds = Number(point.timeSeconds || 0);
+    const endSeconds = nextPoint ? Number(nextPoint.timeSeconds || startSeconds + 0.2) : startSeconds + 0.2;
+    return {
+      source: String(sourceLabel || "source")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "source",
+      startSeconds,
+      endSeconds,
+      durationSeconds: Math.max(0.05, endSeconds - startSeconds),
+      strength: Number(point.strength || 0),
+    };
+  });
+}
+
+async function runRhythmAnalysis() {
+  const project = activeRhythmProject();
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!project.source.audio_path) {
+    showToast("Attach a source song before running analysis");
+    return;
+  }
+  const target = analysisSourceForProject(project, el.rhythmAnalysisTarget.value || "source");
+  state.activeRhythmPlaybackRef = target.sourceType === "track" ? `track:${target.sourceRef}` : "source";
+  const config = rhythmAnalysisConfig();
+  setPill(el.rhythmAnalysisState, "Analyzing", "warn");
+  try {
+    const buffer = await decodeRhythmAudio(target.audioPath);
+    const channels = [];
+    for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex += 1) {
+      channels.push(buffer.getChannelData(channelIndex));
+    }
+    const mono = mixToMono(channels, buffer.length);
+    const beatPoints = extractBeatDataFromSamples(mono, buffer.sampleRate, config);
+    const minDistancePoints = Math.max(1, Math.round((config.minDistanceSeconds || 0.22) * buffer.sampleRate / Math.max(1, config.hopSize)));
+    const peakIndices = findZeroSlopePeakIndices(beatPoints, {
+      minStrength: config.minStrength,
+      minProminence: config.minProminence,
+      minDistancePoints,
+    });
+    const sourceEvents = sourceEventsFromPeaks(beatPoints, peakIndices, target.sourceLabel);
+    const analysis = {
+      analysis_id: `analysis-${Date.now().toString(16)}`,
+      label: el.rhythmAnalysisLabel.value.trim() || target.sourceLabel,
+      source_type: target.sourceType,
+      source_ref: target.sourceRef,
+      source_label: target.sourceLabel,
+      algorithm: "energy_peaks_v1",
+      settings: config,
+      beat_points: peakIndices.map((index) => beatPoints[index]),
+      source_events: sourceEvents,
+      duration_seconds: buffer.duration,
+      tempo_bpm: 0,
+      created_at: new Date().toISOString(),
+    };
+    project.analyses = [analysis, ...(project.analyses || [])];
+    state.selectedRhythmAnalysisId = analysis.analysis_id;
+    await saveRhythmProject();
+    setPill(el.rhythmAnalysisState, "Saved", "ok");
+    showToast("Rhythm analysis saved");
+  } catch (error) {
+    setPill(el.rhythmAnalysisState, "Error", "error");
+    showToast(error.message);
+  }
+}
+
+function selectedRhythmRange() {
+  const activeDraft = activeRhythmSelectionDraft();
+  if (!activeDraft) return null;
+  const ranges = (activeDraft.ranges || [])
+    .map((range) => ({
+      start: Math.min(range.startSeconds, range.endSeconds),
+      end: Math.max(range.startSeconds, range.endSeconds),
+    }))
+    .filter((range) => range.end > range.start);
+  if (!ranges.length) return null;
+  return {
+    start: Math.min(...ranges.map((range) => range.start)),
+    end: Math.max(...ranges.map((range) => range.end)),
+    ranges,
+  };
+}
+
+async function saveRhythmSelection() {
+  const project = activeRhythmProject();
+  const analysis = currentRhythmAnalysis();
+  const range = selectedRhythmRange();
+  if (!project || !analysis) {
+    showToast("Select an analysis first");
+    return;
+  }
+  if (!range || range.end <= range.start) {
+    showToast("Drag a range on the chart first");
+    return;
+  }
+  const existingIndex = (project.selections || []).findIndex((selection) => selection.analysis_id === analysis.analysis_id);
+  const existingSelection = existingIndex >= 0 ? project.selections[existingIndex] : null;
+  const mergedRanges = normalizeRhythmSelectionRanges([
+    ...((existingSelection?.ranges || []).map((segment) => ({
+      start: Number(segment.start_seconds ?? segment.start ?? 0),
+      end: Number(segment.end_seconds ?? segment.end ?? 0),
+    }))),
+    ...range.ranges.map((segment) => ({
+      start: segment.start,
+      end: segment.end,
+    })),
+  ]);
+  if (!mergedRanges.length) {
+    showToast("No valid selection ranges to save");
+    return;
+  }
+  const beats = (analysis.beat_points || []).filter((beat) => {
+    const time = Number(beat.timeSeconds || 0);
+    return mergedRanges.some((segment) => time >= segment.start && time <= segment.end);
+  });
+  if (!beats.length) {
+    showToast("No beats found inside that range");
+    return;
+  }
+  const notes = (analysis.source_events || []).filter((event) => {
+    const start = Number(event.startSeconds || 0);
+    const end = Number(event.endSeconds || 0);
+    return mergedRanges.some((segment) => end >= segment.start && start <= segment.end);
+  });
+  const labelInput = el.rhythmSelectionLabel.value.trim();
+  const nextSelection = {
+    selection_id: existingSelection ? existingSelection.selection_id : `selection-${Date.now().toString(16)}`,
+    label: labelInput || existingSelection?.label || `${analysis.label} selection`,
+    analysis_id: analysis.analysis_id,
+    source: analysis.source_label,
+    ranges: mergedRanges.map((segment) => ({
+      start_seconds: segment.start,
+      end_seconds: segment.end,
+    })),
+    range_start_seconds: mergedRanges[0].start,
+    range_end_seconds: mergedRanges[mergedRanges.length - 1].end,
+    game_beats: beats,
+    game_notes: notes,
+    game_beat_selections: mergedRanges.map((segment) => ({
+      source: String(analysis.source_label || "source").toLowerCase().replace(/[^a-z0-9_-]+/g, "_"),
+      startSeconds: segment.start,
+      endSeconds: segment.end,
+      minStrength: numericValue(el.rhythmMinStrength) ?? 0.16,
+    })),
+    game_beat_config: {
+      gameMode: "step_arrows",
+      mergeWindowSeconds: 0.12,
+    },
+    created_at: existingSelection?.created_at || new Date().toISOString(),
+  };
+  const nextSelections = [...(project.selections || [])];
+  if (existingIndex >= 0) {
+    nextSelections[existingIndex] = nextSelection;
+  } else {
+    nextSelections.unshift(nextSelection);
+  }
+  project.selections = nextSelections;
+  delete state.rhythmSelectionDrafts[analysis.analysis_id];
+  delete state.selectedRhythmDraftSegmentIndices[analysis.analysis_id];
+  state.rhythmSelectionPointer = null;
+  el.rhythmSelectionLabel.value = "";
+  await saveRhythmProject();
+  showToast("Beat selection saved");
+}
+
+function dedupeBeatPoints(points, mergeWindowSeconds = 0.12) {
+  const sorted = [...points].sort((left, right) => Number(left.timeSeconds || 0) - Number(right.timeSeconds || 0));
+  const merged = [];
+  sorted.forEach((point) => {
+    const time = Number(point.timeSeconds || 0);
+    const strength = Number(point.strength || 0);
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(Number(last.timeSeconds || 0) - time) <= mergeWindowSeconds) {
+      if (strength > Number(last.strength || 0)) {
+        last.timeSeconds = time;
+        last.strength = strength;
+      }
+      return;
+    }
+    merged.push({ timeSeconds: time, strength });
+  });
+  return merged;
+}
+
+function normalizeRhythmSelectionRanges(ranges) {
+  const sorted = (ranges || [])
+    .map((range) => ({
+      start: Math.min(Number(range.start ?? range.start_seconds ?? 0), Number(range.end ?? range.end_seconds ?? 0)),
+      end: Math.max(Number(range.start ?? range.start_seconds ?? 0), Number(range.end ?? range.end_seconds ?? 0)),
+    }))
+    .filter((range) => range.end > range.start)
+    .sort((left, right) => left.start - right.start);
+  const merged = [];
+  sorted.forEach((range) => {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end + 0.01) {
+      last.end = Math.max(last.end, range.end);
+      return;
+    }
+    merged.push({ start: range.start, end: range.end });
+  });
+  return merged;
+}
+
+async function mergeRhythmSelections() {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const selected = (project.selections || []).filter((selection) => state.selectedRhythmSelectionIds.includes(selection.selection_id));
+  if (selected.length < 1) {
+    showToast("Select at least one beat selection");
+    return;
+  }
+  const mergeWindowSeconds = 0.12;
+  const gameBeats = dedupeBeatPoints(selected.flatMap((selection) => selection.game_beats || []), mergeWindowSeconds);
+  const gameNotes = selected.flatMap((selection) => selection.game_notes || []);
+  const gameBeatSelections = selected.flatMap((selection) => selection.game_beat_selections || []);
+  const merge = {
+    merge_id: `merge-${Date.now().toString(16)}`,
+    label: el.rhythmMergeLabel.value.trim() || `Merge ${new Date().toLocaleTimeString()}`,
+    selection_ids: selected.map((selection) => selection.selection_id),
+    game_beats: gameBeats,
+    game_notes: gameNotes,
+    game_beat_selections: gameBeatSelections,
+    game_beat_config: {
+      gameMode: "step_arrows",
+      mergeWindowSeconds,
+    },
+    created_at: new Date().toISOString(),
+  };
+  project.merges = [merge, ...(project.merges || [])];
+  state.selectedRhythmMergeId = merge.merge_id;
+  el.rhythmMergeLabel.value = "";
+  await saveRhythmProject();
+  showToast("Merge candidate saved");
+}
+
+async function finalizeRhythmMerge() {
+  const project = activeRhythmProject();
+  const merge = currentRhythmMerge();
+  if (!project || !merge) {
+    showToast("Choose a merge candidate first");
+    return;
+  }
+  project.final_result_id = merge.merge_id;
+  await saveRhythmProject();
+  showToast("Final rhythm beat asset saved to local library");
+}
+
+async function saveRhythmLyrics() {
+  const project = activeRhythmProject();
+  if (!project) return;
+  project.lyrics = {
+    ...(project.lyrics || {}),
+    text: el.rhythmLyricsText.value,
+    enabled: Boolean(el.rhythmLyricsText.value.trim()),
+    source: "edited",
+    updated_at_iso: new Date().toISOString(),
+  };
+  await saveRhythmProject(true);
+}
+
+async function runRhythmTrackExtraction() {
+  const project = activeRhythmProject();
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!project.source.audio_path) {
+    showToast("Attach a source song before extracting tracks");
+    return;
+  }
+  setPill(el.rhythmAnalysisState, "Extracting", "warn");
+  applyAceRuntimeAvailability();
+  try {
+    const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/extract-track`, {
+      method: "POST",
+      body: JSON.stringify({
+        track_name: el.rhythmExtractTrackName.value || "vocals",
+        label: el.rhythmExtractTrackLabel.value.trim() || null,
+        attach_to_project: true,
+        guidance_scale: numericValue(el.rhythmExtractGuidanceScale) ?? 1.0,
+      }),
+    });
+    if (response.project) {
+      state.activeRhythmProject = response.project;
+      state.activeRhythmProjectId = response.project.project_id;
+    }
+    await refreshExtractions();
+    await refreshEditorAssets();
+    await refreshRhythmProjects();
+    const recoveryActive = Boolean(response.extraction && response.extraction.runtime_recovery && response.extraction.runtime_recovery.active);
+    if (response.extraction && response.extraction.status === "recovering") {
+      setPill(el.rhythmAnalysisState, "Recovering", "warn");
+      startRuntimeRecoveryPolling();
+      showToast(response.extraction.message);
+    } else if (response.extraction && response.extraction.status === "complete") {
+      el.rhythmExtractTrackLabel.value = "";
+      if (recoveryActive) {
+        setPill(el.rhythmAnalysisState, "Recovering", "warn");
+        startRuntimeRecoveryPolling();
+        showToast("Track extracted. ACE-Step is restarting to release memory.");
+      } else {
+        setPill(el.rhythmAnalysisState, "Extracted", "ok");
+        showToast("Track extracted and linked to the project");
+      }
+    } else {
+      setPill(el.rhythmAnalysisState, "Failed", "error");
+      showToast((response.extraction && response.extraction.message) || "Track extraction failed");
+    }
+  } catch (error) {
+    setPill(el.rhythmAnalysisState, "Error", "error");
+    showToast(error.message);
+  } finally {
+    await refreshRuntimeState().catch(() => {});
+    applyAceRuntimeAvailability();
+  }
+}
+
+async function extractRhythmLyrics() {
+  const project = activeRhythmProject();
+  if (!project) {
+    showToast("Create or load a project first");
+    return;
+  }
+  if (!project.source.audio_path) {
+    showToast("Attach a source song before extracting lyrics");
+    return;
+  }
+  setPill(el.rhythmAssetState, "Extracting", "warn");
+  try {
+    const response = await api(`/api/rhythm-beats/projects/${encodeURIComponent(project.project_id)}/lyrics/extract`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: el.rhythmLyricsModel.value || "small",
+        language: el.rhythmLyricsLanguage.value.trim() || null,
+      }),
+    });
+    state.activeRhythmProject = response.project;
+    state.activeRhythmProjectId = response.project.project_id;
+    el.rhythmLyricsText.value = (response.lyrics && response.lyrics.text) || "";
+    await refreshRhythmProjects();
+    setPill(el.rhythmAssetState, "Lyrics ready", "ok");
+    showToast("Lyrics extracted from source audio");
+  } catch (error) {
+    setPill(el.rhythmAssetState, "Error", "error");
+    showToast(error.message);
+  }
+}
+
 function renderLocalLibrary() {
   el.libraryList.replaceChildren();
   const items = filteredLibraryItems();
@@ -756,10 +2560,17 @@ function renderLocalLibrary() {
     const isPublished = Boolean(publish && publish.remote_status === "published" && publish.remote_visibility === "public");
     const isPublishing = state.libraryPublishingItemIds.has(item.id);
     const isRevoking = state.libraryRevokingItemIds.has(item.id);
+    const isRhythmGame = item.kind === "rhythm_game";
     const imported = Boolean((item.metadata || {}).imported);
     const creator = (item.metadata || {}).creator || {};
     const creatorName = creator.display_name || creator.creator_slug || "";
     const cardImage = libraryCardImageUrl(item);
+    const rhythmMetadata = item.metadata || {};
+    const rhythmVolumeId = String(rhythmMetadata.volume_id || "");
+    const rhythmSupportedModes = rhythmMetadata.supported_game_modes || {};
+    const rhythmStepArrowsEnabled = rhythmSupportedModes.step_arrows !== false;
+    const rhythmOrbBeatEnabled = Boolean(rhythmSupportedModes.orb_beat);
+    const canEditRhythmPublishSettings = isRhythmGame && !imported;
     row.innerHTML = `
       ${cardImage ? `<div class="library-card-art" style="background-image:url('${escapeHtml(cardImage)}')"></div>` : `<div class="library-card-art empty-art"></div>`}
       <div class="editor-asset-title">
@@ -793,6 +2604,46 @@ function renderLocalLibrary() {
         <span>Description</span>
         <textarea class="library-description-input" rows="2">${escapeHtml(item.description || "")}</textarea>
       </label>
+      ${isRhythmGame ? `
+        <div class="library-rhythm-publish-panel">
+          <div class="generated-title">
+            <strong>Game Publication</strong>
+            <span>${canEditRhythmPublishSettings ? "Adjust before publish" : "Imported assets keep source settings"}</span>
+          </div>
+          <div class="control-grid">
+            <label class="field">
+              <span>Game availability</span>
+              <select class="library-rhythm-enabled" aria-label="Game availability"${canEditRhythmPublishSettings ? "" : " disabled"}>
+                <option value="true"${rhythmMetadata.game_enabled ? " selected" : ""}>Enabled in games</option>
+                <option value="false"${!rhythmMetadata.game_enabled ? " selected" : ""}>Hidden from games</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Volume</span>
+              <select class="library-rhythm-volume" aria-label="Rhythm-game volume"${canEditRhythmPublishSettings ? "" : " disabled"}>
+                <option value="">No volume</option>
+                ${assignableRhythmVolumeOptions(rhythmVolumeId).map((volume) => `<option value="${escapeHtml(volume.volume_id)}"${volume.volume_id === rhythmVolumeId ? " selected" : ""}>${escapeHtml(volume.label)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
+          ${canEditRhythmPublishSettings ? `
+            <div class="button-row generated-actions">
+              <input class="library-rhythm-new-volume-input" type="text" placeholder="New volume name" />
+              <button class="secondary-button library-rhythm-create-volume-button" type="button">Create Volume</button>
+            </div>
+          ` : ""}
+          <div class="toggle-row rhythm-mode-toggle-row">
+            <label><input class="library-rhythm-step-arrows" type="checkbox"${rhythmStepArrowsEnabled ? " checked" : ""}${canEditRhythmPublishSettings ? "" : " disabled"} /> Step arrows</label>
+            <label><input class="library-rhythm-orb-beat" type="checkbox"${rhythmOrbBeatEnabled ? " checked" : ""}${canEditRhythmPublishSettings ? "" : " disabled"} /> Orb beat</label>
+            <span class="mini-state">Laser shoot follows Step arrows</span>
+          </div>
+          ${canEditRhythmPublishSettings ? `
+            <div class="button-row generated-actions">
+              <button class="secondary-button library-rhythm-save-button" type="button">Save Game Settings</button>
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
       <div class="button-row generated-actions">
         <button class="secondary-button library-save-button" type="button">Save Metadata</button>
         <button class="secondary-button library-cover-button" type="button">Set Card Image</button>
@@ -802,6 +2653,64 @@ function renderLocalLibrary() {
     `;
     row.querySelector(".library-save-button").addEventListener("click", () => saveLibraryItem(row, item));
     row.querySelector(".library-cover-button").addEventListener("click", () => setLibraryCardImage(item));
+    const rhythmCreateVolumeButton = row.querySelector(".library-rhythm-create-volume-button");
+    if (rhythmCreateVolumeButton) {
+      rhythmCreateVolumeButton.addEventListener("click", async () => {
+        const input = row.querySelector(".library-rhythm-new-volume-input");
+        const label = input ? input.value.trim() : "";
+        if (!label) {
+          showToast("Enter a new volume name");
+          return;
+        }
+        try {
+          rhythmCreateVolumeButton.disabled = true;
+          rhythmCreateVolumeButton.textContent = "Creating...";
+          const response = await api("/api/rhythm-beats/volumes", {
+            method: "POST",
+            body: JSON.stringify({ label }),
+          });
+          state.rhythmBeatVolumes = response.volumes || [];
+          const created = (state.rhythmBeatVolumes || []).find((volume) => String(volume.label || "") === label);
+          if (input) {
+            input.value = "";
+          }
+          const select = row.querySelector(".library-rhythm-volume");
+          if (select) {
+            const currentValue = created ? created.volume_id : select.value;
+            select.innerHTML = [
+              `<option value="">No volume</option>`,
+              ...assignableRhythmVolumeOptions(currentValue).map((volume) => `<option value="${escapeHtml(volume.volume_id)}"${volume.volume_id === currentValue ? " selected" : ""}>${escapeHtml(volume.label)}</option>`),
+            ].join("");
+          }
+          showToast("Rhythm-game volume saved");
+        } catch (error) {
+          showToast(error.message);
+        } finally {
+          rhythmCreateVolumeButton.disabled = false;
+          rhythmCreateVolumeButton.textContent = "Create Volume";
+        }
+      });
+    }
+    const rhythmSaveButton = row.querySelector(".library-rhythm-save-button");
+    if (rhythmSaveButton) {
+      rhythmSaveButton.addEventListener("click", async () => {
+        try {
+          rhythmSaveButton.disabled = true;
+          rhythmSaveButton.textContent = "Saving...";
+          await updateRhythmGameAssetSettings(item.id, {
+            game_enabled: row.querySelector(".library-rhythm-enabled").value === "true",
+            volume_id: row.querySelector(".library-rhythm-volume").value || null,
+            step_arrows_enabled: row.querySelector(".library-rhythm-step-arrows").checked,
+            orb_beat_enabled: row.querySelector(".library-rhythm-orb-beat").checked,
+          });
+        } catch (error) {
+          showToast(error.message);
+        } finally {
+          rhythmSaveButton.disabled = false;
+          rhythmSaveButton.textContent = "Save Game Settings";
+        }
+      });
+    }
     const publishButton = row.querySelector(".library-publish-button");
     publishButton.disabled = !state.publicLibraryConnection?.authenticated || isPublishing || isRevoking;
     publishButton.addEventListener("click", () => publishLibraryItem(row, item));
@@ -888,8 +2797,20 @@ function formatLibraryDate(value) {
 }
 
 function libraryDetailBadges(item) {
-  if (item.kind !== "dataset") return [];
   const metadata = item.metadata || {};
+  if (item.kind === "rhythm_game") {
+    const supportedModes = metadata.supported_game_modes || {};
+    const modeBadges = [];
+    if (supportedModes.step_arrows !== false) modeBadges.push("Arrows");
+    if (supportedModes.orb_beat) modeBadges.push("Orb");
+    if (supportedModes.step_arrows !== false) modeBadges.push("Laser");
+    return [
+      metadata.game_enabled ? "Game enabled" : "Game hidden",
+      metadata.volume_label ? `Volume: ${metadata.volume_label}` : "No volume",
+      modeBadges.length ? `Modes: ${modeBadges.join(", ")}` : "Modes: none",
+    ];
+  }
+  if (item.kind !== "dataset") return [];
   const declared = Number(metadata.sample_count || 0);
   const indexed = Number(metadata.indexed_sample_file_count || 0);
   const label = declared === indexed ? `${declared} samples` : `${declared} samples, ${indexed} files indexed`;
@@ -2190,9 +4111,11 @@ async function refreshEditorAssets() {
   state.editorAssets = await api("/api/editor/assets");
   renderSourceAssetOptions();
   renderEditorAssets();
+  renderRhythmAssetSelectors();
 }
 
 async function refreshLocalLibrary() {
+  await refreshRhythmVolumes();
   const [response, connection] = await Promise.all([
     api("/api/library/local"),
     api("/api/library/publish/connection"),
@@ -2201,15 +4124,18 @@ async function refreshLocalLibrary() {
   state.localLibraryIndexPath = response.index_path || "";
   state.publicLibraryConnection = connection;
   renderLocalLibrary();
+  renderRhythmAssetList();
   await refreshDatasetSources();
 }
 
 async function reindexLocalLibrary() {
+  await refreshRhythmVolumes();
   setPill(el.libraryState, "Reindexing", "warn");
   const response = await api("/api/library/local/reindex", { method: "POST" });
   state.localLibraryItems = response.items || [];
   state.localLibraryIndexPath = response.index_path || "";
   renderLocalLibrary();
+  renderRhythmAssetList();
   await refreshDatasetSources();
   showToast(`Indexed ${response.count || 0} local library items`);
 }
@@ -2564,13 +4490,14 @@ function syncMusicVocalControls() {
 
 function activityTone(phase) {
   if (phase === "error") return "error";
-  if (["downloading", "initializing", "generating"].includes(phase)) return "warn";
+  if (["downloading", "initializing", "generating", "recovering"].includes(phase)) return "warn";
   if (phase === "ready" || phase === "complete") return "ok";
   return "neutral";
 }
 
 function activityLabel(activity) {
   const phase = activity.phase || "idle";
+  if (phase === "recovering") return "Recovering";
   if (phase === "downloading") return "Downloading";
   if (phase === "initializing") return "Initializing";
   if (phase === "generating") return "Generating";
@@ -2580,10 +4507,13 @@ function activityLabel(activity) {
 }
 
 function renderActivity(activity) {
+  state.runtimeActivity = activity;
   const message = activity.message || "No ACE-Step activity yet.";
   const detail = activity.detail ? `<br>${activity.detail}` : "";
   el.generationActivity.innerHTML = `<strong>${activityLabel(activity)}</strong><br>${message}${detail}`;
-  if (state.isGenerating) {
+  if (aceRuntimeBusy()) {
+    setPill(el.actionState, "Recovering", "warn");
+  } else if (state.isGenerating) {
     setPill(el.actionState, activityLabel(activity), activityTone(activity.phase));
   }
 }
@@ -2592,6 +4522,43 @@ async function refreshActivity() {
   const activity = await api("/api/runtime/activity");
   renderActivity(activity);
   return activity;
+}
+
+async function refreshRuntimeState() {
+  const runtime = await api("/api/runtime/status");
+  renderRuntime(runtime);
+  return runtime;
+}
+
+function startRuntimeRecoveryPolling() {
+  if (state.runtimeRecoveryPollTimer) return;
+  state.runtimeRecoveryPollTimer = window.setInterval(async () => {
+    try {
+      const [runtime] = await Promise.all([refreshRuntimeState(), refreshActivity(), refreshLogs(), refreshExtractions()]);
+      if (state.activeRhythmProjectId) {
+        await loadRhythmProject(state.activeRhythmProjectId, false).catch(() => {});
+      } else {
+        await refreshRhythmProjects().catch(() => {});
+      }
+      if (!(runtime.recovery && runtime.recovery.active)) {
+        const settledLabel = runtime.api_running ? "Ready" : "Error";
+        const settledTone = runtime.api_running ? "ok" : "error";
+        if (el.extractActionState && el.extractActionState.textContent === "Recovering") {
+          setPill(el.extractActionState, settledLabel, settledTone);
+        }
+        if (el.musicActionState && el.musicActionState.textContent === "Recovering") {
+          setPill(el.musicActionState, settledLabel, settledTone);
+        }
+        if (el.rhythmAnalysisState && el.rhythmAnalysisState.textContent === "Recovering") {
+          setPill(el.rhythmAnalysisState, settledLabel, settledTone);
+        }
+        window.clearInterval(state.runtimeRecoveryPollTimer);
+        state.runtimeRecoveryPollTimer = null;
+      }
+    } catch (error) {
+      // Keep polling until the runtime manager answers again.
+    }
+  }, 2500);
 }
 
 function startGenerationPolling() {
@@ -4061,7 +6028,7 @@ function addGeneratedResult(result, plan) {
 
 async function loadAll() {
   await loadInstrumentBank();
-  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, datasetSources, lokrRuns, lokrAdapters, instrumentClips, editorAssets, localLibrary, libraryConnection, logs] = await Promise.all([
+  const [status, runtime, presets, models, tracks, extractions, musicGenerations, lokrDatasets, datasetSources, lokrRuns, lokrAdapters, instrumentClips, rhythmProjects, rhythmVolumes, editorAssets, localLibrary, libraryConnection, logs] = await Promise.all([
     api("/api/status"),
     api("/api/runtime/status"),
     api("/api/presets"),
@@ -4074,6 +6041,8 @@ async function loadAll() {
     api("/api/lokr/runs"),
     api("/api/lokr/adapters"),
     api("/api/instrument-lab/clips"),
+    api("/api/rhythm-beats/projects"),
+    api("/api/rhythm-beats/volumes"),
     api("/api/editor/assets"),
     api("/api/library/local"),
     api("/api/library/publish/connection"),
@@ -4089,6 +6058,8 @@ async function loadAll() {
   state.lokrRuns = lokrRuns;
   state.lokrAdapters = lokrAdapters;
   state.instrumentClips = instrumentClips;
+  state.rhythmBeatProjects = rhythmProjects;
+  state.rhythmBeatVolumes = rhythmVolumes.volumes || [];
   state.editorAssets = editorAssets;
   state.localLibraryItems = localLibrary.items || [];
   state.localLibraryIndexPath = localLibrary.index_path || "";
@@ -4117,6 +6088,14 @@ async function loadAll() {
   renderEditorAssets();
   renderLocalLibrary();
   renderPublicLibrary();
+  if (runtime.recovery && runtime.recovery.active) {
+    startRuntimeRecoveryPolling();
+  }
+  if (state.rhythmBeatProjects.length) {
+    await loadRhythmProject(state.rhythmBeatProjects[0].project_id, false);
+  } else {
+    renderRhythmBeatLab();
+  }
   renderLogs(logs);
 }
 
@@ -4337,20 +6316,32 @@ async function runExtraction() {
     state.extractionResults = state.extractionResults.slice(0, 24);
     renderExtractionList();
     await refreshEditorAssets();
+    const recoveryActive = Boolean(response.extraction.runtime_recovery && response.extraction.runtime_recovery.active);
     if (response.extraction.status === "complete") {
-      setPill(el.extractActionState, "Complete", "ok");
-      el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Track extraction finished.";
+      if (recoveryActive) {
+        setPill(el.extractActionState, "Recovering", "warn");
+        el.extractionActivity.innerHTML = "<strong>Recovering</strong><br>Track extraction finished. ACE-Step is restarting to release memory.";
+        startRuntimeRecoveryPolling();
+      } else {
+        setPill(el.extractActionState, "Complete", "ok");
+        el.extractionActivity.innerHTML = "<strong>Complete</strong><br>Track extraction finished.";
+      }
+    } else if (response.extraction.status === "recovering") {
+      setPill(el.extractActionState, "Recovering", "warn");
+      el.extractionActivity.innerHTML = `<strong>Recovering</strong><br>${escapeHtml(response.extraction.message)}`;
+      startRuntimeRecoveryPolling();
     } else {
       setPill(el.extractActionState, "Failed", "error");
-      el.extractionActivity.innerHTML = `<strong>Failed</strong><br>${response.extraction.message}`;
+      el.extractionActivity.innerHTML = `<strong>Failed</strong><br>${escapeHtml(response.extraction.message)}`;
     }
     showToast(response.extraction.message);
   } catch (error) {
     setPill(el.extractActionState, "Error", "error");
-    el.extractionActivity.innerHTML = `<strong>Error</strong><br>${error.message}`;
+    el.extractionActivity.innerHTML = `<strong>Error</strong><br>${escapeHtml(error.message)}`;
     showToast(error.message);
   } finally {
-    el.runExtractionButton.disabled = false;
+    await refreshRuntimeState().catch(() => {});
+    applyAceRuntimeAvailability();
     refreshLogs();
   }
 }
@@ -4396,6 +6387,10 @@ async function runMusicGeneration() {
     if (response.generation.status === "complete") {
       setPill(el.musicActionState, "Complete", "ok");
       el.musicActivity.innerHTML = "<strong>Complete</strong><br>Music generation finished.";
+    } else if (response.generation.status === "recovering") {
+      setPill(el.musicActionState, "Recovering", "warn");
+      el.musicActivity.innerHTML = `<strong>Recovering</strong><br>${escapeHtml(response.generation.message)}`;
+      startRuntimeRecoveryPolling();
     } else {
       setPill(el.musicActionState, "Failed", "error");
       el.musicActivity.innerHTML = `<strong>Failed</strong><br>${escapeHtml(response.generation.message)}`;
@@ -4406,7 +6401,8 @@ async function runMusicGeneration() {
     el.musicActivity.innerHTML = `<strong>Error</strong><br>${escapeHtml(error.message)}`;
     showToast(error.message);
   } finally {
-    el.runMusicButton.disabled = false;
+    await refreshRuntimeState().catch(() => {});
+    applyAceRuntimeAvailability();
     refreshLogs();
   }
 }
@@ -4451,11 +6447,12 @@ async function generateTransition() {
     }
   } catch (error) {
     setPill(el.actionState, "Error", "error");
-    el.generationActivity.innerHTML = `<strong>Error</strong><br>${error.message}`;
+    el.generationActivity.innerHTML = `<strong>Error</strong><br>${escapeHtml(error.message)}`;
     showToast(error.message);
   } finally {
     stopGenerationPolling();
-    el.generateButton.disabled = false;
+    await refreshRuntimeState().catch(() => {});
+    applyAceRuntimeAvailability();
     refreshLogs();
   }
 }
@@ -4492,10 +6489,11 @@ async function refreshLogs() {
 
 async function refreshStatus() {
   renderStatus(await api("/api/status"));
-  renderRuntime(await api("/api/runtime/status"));
+  await refreshRuntimeState();
   await refreshActivity();
   await refreshModels();
   await refreshEditorAssets();
+  await refreshRhythmProjects();
   await refreshLokrRuns();
   await refreshLogs();
   showToast("Status refreshed");
@@ -4508,6 +6506,7 @@ el.datasetEditorTabButton.addEventListener("click", () => setActivePage("dataset
 el.lokrTrainingTabButton.addEventListener("click", () => setActivePage("lokr"));
 el.instrumentLabTabButton.addEventListener("click", () => setActivePage("instrument"));
 el.audioEditTabButton.addEventListener("click", () => setActivePage("audioedit"));
+el.rhythmBeatTabButton.addEventListener("click", () => setActivePage("rhythm"));
 el.libraryTabButton.addEventListener("click", () => setActivePage("library"));
 el.reloadAudioEditorButton.addEventListener("click", reloadAudioEditor);
 el.openAudioEditorButton.addEventListener("click", openAudioEditorWindow);
@@ -4568,6 +6567,159 @@ el.libraryKindFilter.addEventListener("change", renderLocalLibrary);
 el.editSaveFile.addEventListener("change", () => {
   const file = el.editSaveFile.files && el.editSaveFile.files[0];
   el.editSaveFileName.textContent = file ? file.name : "No file selected";
+});
+el.rhythmSourceFile.addEventListener("change", () => {
+  const file = el.rhythmSourceFile.files && el.rhythmSourceFile.files[0];
+  el.rhythmSourceFileName.textContent = file ? file.name : "No file selected";
+});
+el.createRhythmProjectButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.createRhythmProjectButton, "Creating...", () => createRhythmProject()).catch((error) => showToast(error.message));
+});
+el.refreshRhythmProjectsButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.refreshRhythmProjectsButton, "Refreshing...", async () => {
+    await refreshRhythmProjects();
+    showToast("Rhythm beat projects refreshed");
+  }).catch((error) => showToast(error.message));
+});
+el.uploadRhythmSourceButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.uploadRhythmSourceButton, "Uploading...", () => uploadRhythmSource()).catch((error) => showToast(error.message));
+});
+el.loadRhythmSourceAssetButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.loadRhythmSourceAssetButton, "Attaching...", () => attachRhythmSourceAsset()).catch((error) => showToast(error.message));
+});
+el.addRhythmTrackButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.addRhythmTrackButton, "Adding...", () => addRhythmTrack()).catch((error) => showToast(error.message));
+});
+el.runRhythmAnalysisButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.runRhythmAnalysisButton, "Analyzing...", () => runRhythmAnalysis()).catch((error) => showToast(error.message));
+});
+el.runRhythmTrackExtractionButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.runRhythmTrackExtractionButton, "Extracting...", () => runRhythmTrackExtraction()).catch((error) => showToast(error.message));
+});
+el.saveRhythmSelectionButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.saveRhythmSelectionButton, "Saving...", () => saveRhythmSelection()).catch((error) => showToast(error.message));
+});
+el.mergeRhythmSelectionsButton.addEventListener("click", () => {
+  runWithButtonBusyState(
+    el.mergeRhythmSelectionsButton,
+    "Creating...",
+    () => mergeRhythmSelections(),
+    { restore: () => updateRhythmCandidateActionLabel() }
+  ).catch((error) => showToast(error.message));
+});
+el.finalizeRhythmMergeButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.finalizeRhythmMergeButton, "Finalizing...", () => finalizeRhythmMerge()).catch((error) => showToast(error.message));
+});
+el.saveRhythmLyricsButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.saveRhythmLyricsButton, "Saving...", () => saveRhythmLyrics()).catch((error) => showToast(error.message));
+});
+el.extractRhythmLyricsButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.extractRhythmLyricsButton, "Extracting...", () => extractRhythmLyrics()).catch((error) => showToast(error.message));
+});
+if (el.createRhythmVolumeButton) {
+  el.createRhythmVolumeButton.addEventListener("click", () => {
+    runWithButtonBusyState(el.createRhythmVolumeButton, "Creating...", () => createRhythmVolume()).catch((error) => showToast(error.message));
+  });
+}
+el.saveRhythmProjectButton.addEventListener("click", () => {
+  runWithButtonBusyState(el.saveRhythmProjectButton, "Saving...", () => saveRhythmProject(true)).catch((error) => showToast(error.message));
+});
+el.rhythmActiveAnalysisSelect.addEventListener("change", () => {
+  state.selectedRhythmAnalysisId = el.rhythmActiveAnalysisSelect.value || null;
+  syncRhythmPlaybackSourceToAnalysis();
+  drawRhythmChart();
+});
+el.rhythmViewMode.addEventListener("change", drawRhythmChart);
+el.rhythmExtractTrackName.addEventListener("change", updateRhythmExtractionLabelPlaceholder);
+el.rhythmSourceAudio.addEventListener("timeupdate", drawRhythmChart);
+el.rhythmSourceAudio.addEventListener("seeked", drawRhythmChart);
+el.rhythmSourceAudio.addEventListener("play", drawRhythmChart);
+el.rhythmSourceAudio.addEventListener("pause", drawRhythmChart);
+el.rhythmChartStack.addEventListener("pointerdown", (event) => {
+  const project = activeRhythmProject();
+  if (!project) return;
+  const savedSegment = event.target.closest(".rhythm-saved-segment");
+  if (savedSegment) {
+    event.stopPropagation();
+    selectRhythmSavedSegment(
+      savedSegment.dataset.selectionId || "",
+      Number(savedSegment.dataset.segmentIndex || 0),
+    );
+    return;
+  }
+  const draftSegment = event.target.closest(".rhythm-draft-segment");
+  if (draftSegment) {
+    event.stopPropagation();
+    selectRhythmDraftSegment(
+      draftSegment.dataset.analysisId || "",
+      Number(draftSegment.dataset.segmentIndex || 0),
+    );
+    return;
+  }
+  const chartSvg = event.target.closest(".rhythm-chart-svg");
+  if (!chartSvg) return;
+  const analysisId = chartSvg.dataset.analysisId || "";
+  if (!analysisId) return;
+  const analysis = (project.analyses || []).find((item) => item.analysis_id === analysisId);
+  if (!analysis) return;
+  state.selectedRhythmAnalysisId = analysis.analysis_id;
+  const time = rhythmClientXToTime(event.clientX);
+  const existingDraft = state.rhythmSelectionDrafts[analysis.analysis_id]
+    ? { ...state.rhythmSelectionDrafts[analysis.analysis_id], ranges: [...(state.rhythmSelectionDrafts[analysis.analysis_id].ranges || [])] }
+    : { analysisId: analysis.analysis_id, ranges: [] };
+  state.rhythmSelectionPointer = {
+    pointerId: event.pointerId,
+    analysisId: analysis.analysis_id,
+    startSeconds: time,
+    lastSeconds: time,
+    moved: false,
+  };
+  state.rhythmSelectionDrafts[analysis.analysis_id] = existingDraft;
+  if (chartSvg.setPointerCapture) {
+    chartSvg.setPointerCapture(event.pointerId);
+  }
+  renderRhythmBeatLab();
+});
+window.addEventListener("pointermove", (event) => {
+  const pointer = state.rhythmSelectionPointer;
+  if (!pointer || pointer.pointerId !== event.pointerId) return;
+  maybeAutoScrollRhythmChart(event.clientX);
+  const time = rhythmClientXToTime(event.clientX);
+  pointer.lastSeconds = time;
+  if (!pointer.moved && Math.abs(time - pointer.startSeconds) >= 0.03) {
+    pointer.moved = true;
+    state.rhythmSelectionDrafts[pointer.analysisId] = {
+      analysisId: pointer.analysisId,
+      ranges: [
+        ...(state.rhythmSelectionDrafts[pointer.analysisId]?.ranges || []),
+        { startSeconds: pointer.startSeconds, endSeconds: time },
+      ],
+    };
+    state.selectedRhythmDraftSegmentIndices[pointer.analysisId] = state.rhythmSelectionDrafts[pointer.analysisId].ranges.length - 1;
+  }
+  if (pointer.moved && state.rhythmSelectionDrafts[pointer.analysisId]?.ranges?.length) {
+    const draft = state.rhythmSelectionDrafts[pointer.analysisId];
+    draft.ranges[draft.ranges.length - 1].endSeconds = time;
+  }
+  drawRhythmChart();
+});
+window.addEventListener("pointerup", (event) => {
+  const pointer = state.rhythmSelectionPointer;
+  if (!pointer || pointer.pointerId !== event.pointerId) return;
+  if (!pointer.moved) {
+    const nextTime = Math.max(0, pointer.lastSeconds);
+    el.rhythmSourceAudio.currentTime = nextTime;
+  } else if (state.rhythmSelectionDrafts[pointer.analysisId]?.ranges?.length) {
+    const draft = state.rhythmSelectionDrafts[pointer.analysisId];
+    const lastIndex = draft.ranges.length - 1;
+    const lastRange = draft.ranges[lastIndex];
+    draft.ranges[lastIndex] = {
+      startSeconds: Math.min(lastRange.startSeconds, lastRange.endSeconds),
+      endSeconds: Math.max(lastRange.startSeconds, lastRange.endSeconds),
+    };
+  }
+  state.rhythmSelectionPointer = null;
+  drawRhythmChart();
 });
 el.saveEditButton.addEventListener("click", saveEditedAudio);
 el.generateButton.addEventListener("click", generateTransition);

@@ -67,6 +67,16 @@ def summarize_lines(lines: list[str]) -> RuntimeActivity:
             return RuntimeActivity(phase="generating", message=line, detail=None, latest_lines=latest)
 
     for line in reversed(clean_lines):
+        lowered = line.lower()
+        if "fatal exception" in lowered or "access violation" in lowered:
+            return RuntimeActivity(
+                phase="error",
+                message=line,
+                detail="ACE-Step runtime crashed inside native code.",
+                latest_lines=latest,
+            )
+
+    for line in reversed(clean_lines):
         progress = _parse_progress(line)
         if progress:
             filename, percent, done, total = progress

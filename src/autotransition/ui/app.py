@@ -8,6 +8,8 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
+import time
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Literal
@@ -44,7 +46,13 @@ from autotransition.library.publish import (
     request_wallet_nonce,
     save_publish_settings,
 )
-from autotransition.library.schema import LibraryFile, LibraryItem, audio_mime_type_for_path, library_item_from_editor_asset
+from autotransition.library.schema import (
+    LibraryFile,
+    LibraryItem,
+    audio_mime_type_for_path,
+    library_item_from_editor_asset,
+    utc_now_iso,
+)
 from autotransition.models import (
     AceStepRepaintAdapter,
     AceStepRuntimeError,
@@ -80,8 +88,24 @@ from autotransition.pipeline import (
     create_source_selection_plan,
 )
 from autotransition.presets import PRESETS, get_preset
+from autotransition.rhythm_beats import (
+    copy_uploaded_source_audio,
+    create_project as create_rhythm_project,
+    library_item_from_rhythm_project,
+    list_volumes as list_rhythm_volumes,
+    list_projects as list_rhythm_projects,
+    read_project as read_rhythm_project,
+    remove_volume as remove_rhythm_volume,
+    safe_project_id as safe_rhythm_project_id,
+    upsert_volume as upsert_rhythm_volume,
+    write_project as write_rhythm_project,
+)
 from autotransition.ui.activity import summarize_runtime_activity
 from autotransition.ui.state import UiLog, system_status
+
+
+_extract_retry_lock = threading.Lock()
+_extract_retry_threads: dict[str, threading.Thread] = {}
 
 
 class ScaffoldRequest(BaseModel):
@@ -184,6 +208,55 @@ class LocalLibraryUpdateRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     license: str | None = Field(None, max_length=160)
     attribution: str | None = Field(None, max_length=1000)
+
+
+class RhythmBeatProjectCreateRequest(BaseModel):
+    label: str = Field("New rhythm beat project", min_length=1, max_length=160)
+
+
+class RhythmBeatProjectSaveRequest(BaseModel):
+    project: dict[str, Any]
+
+
+class RhythmBeatProjectAssetRequest(BaseModel):
+    asset_id: str = Field(..., min_length=1)
+
+
+class RhythmBeatExtractionRequest(BaseModel):
+    track_name: str = "vocals"
+    label: str | None = None
+    attach_to_project: bool = True
+    output_format: Literal["flac", "wav", "wav32", "mp3", "opus", "aac"] = "flac"
+    inference_steps: int = Field(BASE_RUNTIME_INFERENCE_STEPS, ge=1, le=200)
+    guidance_scale: float = Field(BASE_EXTRACT_GUIDANCE_SCALE, ge=0)
+    shift: float = Field(BASE_RUNTIME_SHIFT, ge=0)
+    infer_method: Literal["ode", "sde"] = BASE_RUNTIME_INFER_METHOD
+    use_tiled_decode: bool = BASE_RUNTIME_USE_TILED_DECODE
+    dcw_enabled: bool = BASE_RUNTIME_DCW_ENABLED
+    velocity_norm_threshold: float = Field(BASE_RUNTIME_VELOCITY_NORM_THRESHOLD, ge=0)
+    velocity_ema_factor: float = Field(BASE_RUNTIME_VELOCITY_EMA_FACTOR, ge=0, le=1)
+    seed: int | None = None
+    instruction: str | None = None
+
+
+class RhythmBeatLyricsExtractionRequest(BaseModel):
+    model: str = Field("small", min_length=1, max_length=80)
+    language: str | None = Field(None, max_length=32)
+    disable_word_timestamps: bool = False
+
+
+class RhythmBeatVolumeUpsertRequest(BaseModel):
+    volume_id: str | None = Field(None, max_length=80)
+    label: str = Field(..., min_length=1, max_length=160)
+    description: str = Field("", max_length=500)
+    sort_order: int = Field(0, ge=0, le=9999)
+
+
+class RhythmBeatGameAssetSettingsRequest(BaseModel):
+    game_enabled: bool
+    volume_id: str | None = Field(None, max_length=80)
+    step_arrows_enabled: bool = True
+    orb_beat_enabled: bool = False
 
 
 class PublicLibraryConnectionRequest(BaseModel):
@@ -333,6 +406,18 @@ def _write_metadata(metadata_path: Path, metadata: dict[str, Any]) -> dict[str, 
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata
+
+
+def _update_extraction_metadata(
+    extraction_id: str,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        metadata = _read_extraction_metadata(extraction_id)
+    except HTTPException:
+        return None
+    metadata.update(updates)
+    return _write_extraction_metadata(metadata)
 
 
 def _music_generation_root() -> Path:
@@ -1525,6 +1610,13 @@ def _local_library() -> LocalLibraryIndex:
     return LocalLibraryIndex(Path("data/library"))
 
 
+def _find_editor_asset(asset_id: str) -> dict[str, Any]:
+    for asset in _editor_assets():
+        if str(asset.get("asset_id") or "") == asset_id:
+            return asset
+    raise FileNotFoundError(f"Editor asset not found: {asset_id}")
+
+
 def _sync_local_library_index() -> list[LibraryItem]:
     library = _local_library()
     return library.reindex_items(_local_library_scanned_items())
@@ -1610,6 +1702,419 @@ def _library_items_from_lokr_datasets() -> list[LibraryItem]:
     return items
 
 
+def _attach_extraction_to_rhythm_project(
+    *,
+    project_id: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    project = read_rhythm_project(project_id)
+    output_path = Path(str(metadata.get("generated_audio_path") or "")).expanduser()
+    extracted_probe = probe_audio(output_path)
+    project_tracks = list(project.get("tracks") or [])
+    extraction_ref = str(metadata.get("extraction_id") or "")
+    if not any(str(track.get("source_asset_id") or "") == extraction_ref for track in project_tracks):
+        project_tracks.append(
+            {
+                "track_id": f"track-{uuid4().hex[:10]}",
+                "label": str(metadata.get("label") or metadata.get("track_name") or output_path.stem),
+                "audio_path": str(output_path),
+                "audio_url": f"/api/audio?path={quote(str(output_path))}",
+                "duration_seconds": extracted_probe.duration_seconds,
+                "source_asset_id": extraction_ref,
+                "source_category": "extraction",
+                "created_at": utc_now_iso(),
+            }
+        )
+        project["tracks"] = project_tracks
+        project = write_rhythm_project(project)
+        _sync_local_library_index()
+    return project
+
+
+def _schedule_extraction_retry(
+    *,
+    extraction_id: str,
+    runtime_config: RuntimeConfig,
+    source_path: Path,
+    track_name: str,
+    label: str,
+    output_format: str,
+    inference_steps: int,
+    guidance_scale: float,
+    shift: float,
+    infer_method: str,
+    use_tiled_decode: bool,
+    dcw_enabled: bool,
+    velocity_norm_threshold: float,
+    velocity_ema_factor: float,
+    seed: int | None,
+    instruction: str | None,
+    rhythm_project_id: str | None = None,
+) -> None:
+    from autotransition.runtime.ace_step import api_health, runtime_recovery_state
+
+    def runner() -> None:
+        try:
+            deadline = time.monotonic() + runtime_config.api_startup_timeout_seconds + 120
+            while time.monotonic() < deadline:
+                recovery = runtime_recovery_state()
+                if not recovery.active and api_health(runtime_config):
+                    break
+                _update_extraction_metadata(
+                    extraction_id,
+                    {
+                        "status": "recovering",
+                        "message": "ACE-Step runtime is recovering. Extraction will retry automatically when the runtime is ready.",
+                        "retry_state": "waiting_for_runtime",
+                    },
+                )
+                time.sleep(2)
+            else:
+                _update_extraction_metadata(
+                    extraction_id,
+                    {
+                        "status": "failed",
+                        "message": "ACE-Step runtime did not recover in time. Retry the extraction.",
+                        "retry_state": "recovery_timeout",
+                    },
+                )
+                return
+
+            _update_extraction_metadata(
+                extraction_id,
+                {
+                    "status": "retrying",
+                    "message": "ACE-Step runtime recovered. Retrying extraction now.",
+                    "retry_state": "retrying",
+                },
+            )
+
+            result = AceStepApiClient(runtime_config).extract_track(
+                source_path=source_path,
+                track_name=track_name,
+                save_dir=Path("data/extractions") / extraction_id,
+                audio_format=output_format,
+                inference_steps=inference_steps,
+                guidance_scale=guidance_scale,
+                shift=shift,
+                infer_method=infer_method,
+                use_tiled_decode=use_tiled_decode,
+                dcw_enabled=dcw_enabled,
+                velocity_norm_threshold=velocity_norm_threshold,
+                velocity_ema_factor=velocity_ema_factor,
+                seed=seed,
+                instruction=instruction.strip() if instruction else None,
+            )
+            metadata = _update_extraction_metadata(
+                extraction_id,
+                {
+                    "status": "complete",
+                    "message": "Extraction complete after ACE-Step runtime recovery.",
+                    "generated_audio_path": str(result.output_path),
+                    "generated_metadata_path": str(result.metadata_path),
+                    "retry_state": "complete",
+                },
+            )
+            if metadata and rhythm_project_id:
+                _attach_extraction_to_rhythm_project(project_id=rhythm_project_id, metadata=metadata)
+        except Exception as exc:
+            _update_extraction_metadata(
+                extraction_id,
+                {
+                    "status": "failed",
+                    "message": f"Extraction retry failed after runtime recovery: {exc}",
+                    "retry_state": "failed",
+                },
+            )
+        finally:
+            with _extract_retry_lock:
+                _extract_retry_threads.pop(extraction_id, None)
+
+    with _extract_retry_lock:
+        existing = _extract_retry_threads.get(extraction_id)
+        if existing and existing.is_alive():
+            return
+        thread = threading.Thread(target=runner, name=f"extract-retry-{extraction_id}", daemon=True)
+        _extract_retry_threads[extraction_id] = thread
+        thread.start()
+
+
+def _schedule_post_extract_runtime_recycle(
+    runtime_config: RuntimeConfig,
+    ui_log: UiLog,
+    *,
+    reason: str,
+) -> dict[str, Any] | None:
+    import sys
+
+    if sys.platform != "win32":
+        return None
+    from autotransition.runtime.ace_step import runtime_recovery_state, schedule_runtime_recycle
+
+    recovery = runtime_recovery_state()
+    if recovery.active:
+        return recovery.to_dict()
+    recycled = schedule_runtime_recycle(reason=reason, config=runtime_config)
+    ui_log.add("info", "Restarting ACE-Step runtime after base extraction to release Windows paging pressure.")
+    return recycled.to_dict()
+
+
+def _run_extraction_job(
+    *,
+    runtime_config: RuntimeConfig,
+    ui_log: UiLog,
+    source_path: Path,
+    track_name: str,
+    label: str,
+    output_format: str,
+    inference_steps: int,
+    guidance_scale: float,
+    shift: float,
+    infer_method: str,
+    use_tiled_decode: bool,
+    dcw_enabled: bool,
+    velocity_norm_threshold: float,
+    velocity_ema_factor: float,
+    seed: int | None,
+    instruction: str | None,
+    rhythm_project_id: str | None = None,
+) -> dict[str, Any]:
+    import datetime as _datetime
+
+    if track_name not in EXTRACT_TRACKS:
+        raise HTTPException(status_code=400, detail=f"Unknown extract track: {track_name}")
+
+    try:
+        probe = probe_audio(source_path)
+    except Exception as exc:
+        ui_log.add("error", str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    extraction_id = f"extraction-{uuid4().hex[:12]}"
+    save_dir = Path("data/extractions") / extraction_id
+    metadata_path = save_dir / "extraction.json"
+    created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
+    ui_log.add("info", f"Running ACE-Step extract for {track_name}; base model will be loaded in the ACE runtime if needed.")
+
+    try:
+        result = AceStepApiClient(runtime_config).extract_track(
+            source_path=source_path,
+            track_name=track_name,
+            save_dir=save_dir,
+            audio_format=output_format,
+            inference_steps=inference_steps,
+            guidance_scale=guidance_scale,
+            shift=shift,
+            infer_method=infer_method,
+            use_tiled_decode=use_tiled_decode,
+            dcw_enabled=dcw_enabled,
+            velocity_norm_threshold=velocity_norm_threshold,
+            velocity_ema_factor=velocity_ema_factor,
+            seed=seed,
+            instruction=instruction.strip() if instruction else None,
+        )
+    except AceStepApiError as exc:
+        failure = _handle_ace_runtime_failure(runtime_config, ui_log, "ACE-Step track extraction failed.", exc)
+        metadata = {
+            "extraction_id": extraction_id,
+            "status": "recovering" if failure["recovery_active"] else "failed",
+            "message": failure["message"],
+            "created_at": created_at,
+            "source_path": str(source_path),
+            "source_format": probe.source_format,
+            "source_duration_seconds": probe.duration_seconds,
+            "track_name": track_name,
+            "label": label,
+            "output_format": output_format,
+            "metadata_path": str(metadata_path),
+            "runtime_recovery": failure["recovery"],
+            "retry_state": "waiting_for_runtime" if failure["recovery_active"] else "failed",
+        }
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        if failure["recovery_active"]:
+            _schedule_extraction_retry(
+                extraction_id=extraction_id,
+                runtime_config=runtime_config,
+                source_path=source_path,
+                track_name=track_name,
+                label=label,
+                output_format=output_format,
+                inference_steps=inference_steps,
+                guidance_scale=guidance_scale,
+                shift=shift,
+                infer_method=infer_method,
+                use_tiled_decode=use_tiled_decode,
+                dcw_enabled=dcw_enabled,
+                velocity_norm_threshold=velocity_norm_threshold,
+                velocity_ema_factor=velocity_ema_factor,
+                seed=seed,
+                instruction=instruction,
+                rhythm_project_id=rhythm_project_id,
+            )
+            return metadata
+        recycle = _schedule_post_extract_runtime_recycle(
+            runtime_config,
+            ui_log,
+            reason="Restarting ACE-Step after base extraction failure to release Windows paging pressure.",
+        )
+        if recycle is not None:
+            metadata["runtime_recovery"] = recycle
+            metadata["post_extract_runtime_recycle"] = True
+            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        return metadata
+
+    metadata = {
+        "extraction_id": extraction_id,
+        "status": "complete",
+        "message": "Extraction complete.",
+        "created_at": created_at,
+        "source_path": str(source_path),
+        "source_format": probe.source_format,
+        "source_duration_seconds": probe.duration_seconds,
+        "track_name": track_name,
+        "label": label,
+        "output_format": output_format,
+        "generated_audio_path": str(result.output_path),
+        "generated_metadata_path": str(result.metadata_path),
+        "metadata_path": str(metadata_path),
+        "settings": {
+            "inference_steps": inference_steps,
+            "guidance_scale": guidance_scale,
+            "shift": shift,
+            "infer_method": infer_method,
+            "use_tiled_decode": use_tiled_decode,
+            "dcw_enabled": dcw_enabled,
+            "velocity_norm_threshold": velocity_norm_threshold,
+            "velocity_ema_factor": velocity_ema_factor,
+            "seed": seed,
+            "instruction": instruction,
+        },
+    }
+    recycle = _schedule_post_extract_runtime_recycle(
+        runtime_config,
+        ui_log,
+        reason="Restarting ACE-Step after base extraction completion to release Windows paging pressure.",
+    )
+    if recycle is not None:
+        metadata["runtime_recovery"] = recycle
+        metadata["post_extract_runtime_recycle"] = True
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    ui_log.add("info", f"Extracted {track_name}: {result.output_path}")
+    return metadata
+
+
+def _handle_ace_runtime_failure(
+    runtime_config: RuntimeConfig,
+    ui_log: Any,
+    prefix: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    from autotransition.runtime.ace_step import api_health, runtime_recovery_state, schedule_runtime_recovery
+
+    error_text = str(exc)
+    if api_health(runtime_config):
+        message = f"{prefix} {error_text}"
+        ui_log.add("error", message)
+        return {
+            "message": message,
+            "recovery_active": False,
+            "recovery": runtime_recovery_state().to_dict(),
+        }
+
+    recovery = schedule_runtime_recovery(
+        reason=f"{prefix} Runtime became unreachable after an ACE-Step failure.",
+        config=runtime_config,
+    )
+    message = (
+        "ACE-Step runtime crashed or became unreachable. "
+        "Dance Station is restarting it in the background. "
+        f"{error_text}"
+    )
+    ui_log.add("error", message)
+    return {
+        "message": message,
+        "recovery_active": True,
+        "recovery": recovery.to_dict(),
+    }
+
+
+def _extract_lyrics_from_audio(
+    *,
+    audio_path: Path,
+    model_name: str,
+    language: str | None,
+    include_word_timestamps: bool,
+) -> dict[str, Any]:
+    try:
+        from faster_whisper import WhisperModel
+    except Exception as exc:
+        raise RuntimeError(
+            "faster-whisper is not installed in this environment. Run `python -m pip install -e \".[dev]\"` again."
+        ) from exc
+
+    selected_language = (language or "").strip() or None
+    device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES", "").strip() not in {"", "-1"} else "cpu"
+    if device == "cpu":
+        try:
+            import torch  # type: ignore
+
+            if torch.cuda.is_available():
+                device = "cuda"
+        except Exception:
+            device = "cpu"
+    whisper = WhisperModel(model_name, device=device, compute_type="float16" if device == "cuda" else "int8")
+    segments, info = whisper.transcribe(
+        str(audio_path),
+        language=selected_language,
+        word_timestamps=include_word_timestamps,
+        vad_filter=True,
+    )
+    lyric_segments: list[dict[str, Any]] = []
+    text_lines: list[str] = []
+    for index, segment in enumerate(segments):
+        segment_text = (segment.text or "").strip()
+        if not segment_text:
+            continue
+        text_lines.append(segment_text)
+        lyric_segments.append(
+            {
+                "id": f"segment-{index + 1}",
+                "text": segment_text,
+                "startSeconds": float(segment.start),
+                "endSeconds": float(segment.end),
+                "words": [
+                    {
+                        "text": (word.word or "").strip(),
+                        "startSeconds": float(word.start),
+                        "endSeconds": float(word.end),
+                    }
+                    for word in (segment.words or [])
+                    if (word.word or "").strip()
+                ],
+            }
+        )
+    language_probability = getattr(info, "language_probability", None)
+    return {
+        "enabled": bool(lyric_segments),
+        "source": "extracted",
+        "provider": "faster-whisper",
+        "model": model_name,
+        "language": getattr(info, "language", None),
+        "language_probability": float(language_probability) if language_probability is not None else None,
+        "text": "\n".join(text_lines),
+        "segments": lyric_segments,
+        "updated_at_iso": utc_now_iso(),
+    }
+
+
+def _default_rhythm_track_label(source_path: Path, track_name: str) -> str:
+    source_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source_path.stem).strip("._") or "source"
+    clean_track_name = re.sub(r"[^A-Za-z0-9._-]+", "_", track_name.strip().lower()).strip("._") or "track"
+    return f"{source_stem}_{clean_track_name}"
+
+
 def _library_items_from_lokr_adapters() -> list[LibraryItem]:
     items: list[LibraryItem] = []
     for adapter in _lokr_adapters():
@@ -1661,10 +2166,27 @@ def _library_items_from_lokr_adapters() -> list[LibraryItem]:
     return items
 
 
+def _library_items_from_rhythm_projects() -> list[LibraryItem]:
+    items: list[LibraryItem] = []
+    for summary in list_rhythm_projects():
+        project_id = str(summary.get("project_id") or "")
+        if not project_id or not summary.get("has_final_asset"):
+            continue
+        try:
+            project = read_rhythm_project(project_id)
+        except Exception:
+            continue
+        item = library_item_from_rhythm_project(project)
+        if item is not None:
+            items.append(item)
+    return items
+
+
 def _local_library_scanned_items() -> list[LibraryItem]:
     items = [item for asset in _editor_assets() if (item := library_item_from_editor_asset(asset)) is not None]
     items.extend(_library_items_from_lokr_datasets())
     items.extend(_library_items_from_lokr_adapters())
+    items.extend(_library_items_from_rhythm_projects())
     return items
 
 
@@ -1809,9 +2331,19 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.get("/api/runtime/status")
     def get_runtime_status() -> dict[str, object]:
-        from autotransition.runtime.ace_step import build_install_commands, build_start_api_command, runtime_status
+        from autotransition.runtime.ace_step import (
+            build_install_commands,
+            build_start_api_command,
+            managed_runtime_alive,
+            read_runtime_pid,
+            runtime_recovery_state,
+            runtime_status,
+        )
 
         status = runtime_status(runtime_config).to_dict()
+        status["recovery"] = runtime_recovery_state().to_dict()
+        status["managed_pid"] = read_runtime_pid()
+        status["managed_pid_alive"] = managed_runtime_alive(runtime_config)
         status["install_commands"] = build_install_commands(runtime_config)
         status["start_api_command"] = build_start_api_command(runtime_config)
         status["simple_setup_command"] = "autotransition runtime setup"
@@ -1822,13 +2354,19 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.get("/api/runtime/activity")
     def get_runtime_activity() -> dict[str, object]:
-        from autotransition.runtime.ace_step import runtime_status
+        from autotransition.runtime.ace_step import runtime_recovery_state, runtime_status
 
         activity = summarize_runtime_activity().to_dict()
         status = runtime_status(runtime_config)
+        recovery = runtime_recovery_state()
         activity["api_running"] = status.api_running
         activity["api_url"] = status.api_url
         activity["runtime_message"] = status.message
+        activity["recovery"] = recovery.to_dict()
+        if recovery.active:
+            activity["phase"] = "recovering"
+            activity["message"] = recovery.message
+            activity["detail"] = recovery.reason
         return activity
 
     @app.get("/api/source/audio")
@@ -1903,6 +2441,314 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
     @app.get("/api/editor/audio")
     def get_editor_audio(path: str = Query(..., min_length=1)) -> FileResponse:
         return get_audio_file(path)
+
+    @app.get("/api/rhythm-beats/projects")
+    def get_rhythm_beat_projects() -> list[dict[str, Any]]:
+        return list_rhythm_projects()
+
+    @app.get("/api/rhythm-beats/volumes")
+    def get_rhythm_beat_volumes() -> dict[str, Any]:
+        return {"volumes": list_rhythm_volumes()}
+
+    @app.post("/api/rhythm-beats/volumes")
+    def save_rhythm_beat_volume(request: RhythmBeatVolumeUpsertRequest) -> dict[str, Any]:
+        volume = {
+            "volume_id": request.volume_id,
+            "label": request.label,
+            "description": request.description,
+            "sort_order": request.sort_order,
+        }
+        try:
+            volumes = upsert_rhythm_volume(volume)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        ui_log.add("info", f"Saved rhythm-game volume '{request.label}'.")
+        return {"volumes": volumes}
+
+    @app.delete("/api/rhythm-beats/volumes/{volume_id}")
+    def delete_rhythm_beat_volume(volume_id: str) -> dict[str, Any]:
+        try:
+            volumes = remove_rhythm_volume(volume_id)
+            for summary in list_rhythm_projects():
+                project_id = str(summary.get("project_id") or "")
+                if not project_id:
+                    continue
+                project = read_rhythm_project(project_id)
+                game_asset = dict(project.get("game_asset") or {})
+                if str(game_asset.get("volume_id") or "") != volume_id:
+                    continue
+                game_asset.update(
+                    {
+                        "volume_id": "",
+                        "volume_label": "",
+                        "volume_slug": "",
+                        "official_volume": False,
+                        "sort_order": 0,
+                        "supported_game_modes": dict(
+                            (game_asset.get("supported_game_modes") or {})
+                        ),
+                    }
+                )
+                project["game_asset"] = game_asset
+                write_rhythm_project(project)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Removed rhythm-game volume '{volume_id}'.")
+        return {"volumes": volumes}
+
+    @app.get("/api/rhythm-beats/projects/{project_id}")
+    def get_rhythm_beat_project(project_id: str) -> dict[str, Any]:
+        try:
+            return read_rhythm_project(project_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/rhythm-beats/projects")
+    def create_rhythm_beat_project_route(request: RhythmBeatProjectCreateRequest) -> dict[str, Any]:
+        project = write_rhythm_project(create_rhythm_project(request.label))
+        _sync_local_library_index()
+        ui_log.add("info", f"Created rhythm beat project: {project['label']}")
+        return {"project": project}
+
+    @app.patch("/api/rhythm-beats/projects/{project_id}")
+    def save_rhythm_beat_project(project_id: str, request: RhythmBeatProjectSaveRequest) -> dict[str, Any]:
+        try:
+            project = dict(request.project or {})
+            project["project_id"] = safe_rhythm_project_id(project_id)
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        return {"project": saved}
+
+    @app.patch("/api/rhythm-beats/projects/{project_id}/game-asset")
+    def update_rhythm_game_asset_settings(project_id: str, request: RhythmBeatGameAssetSettingsRequest) -> dict[str, Any]:
+        try:
+            project = read_rhythm_project(project_id)
+            selected_volume_id = str(request.volume_id or "").strip()
+            volumes = list_rhythm_volumes()
+            selected_volume = next((volume for volume in volumes if str(volume.get("volume_id") or "") == selected_volume_id), None)
+            if selected_volume and bool(selected_volume.get("official", False)):
+                raise ValueError("The official Faceless volume can only be managed from the official admin workflow.")
+            project["game_asset"] = {
+                "game_enabled": request.game_enabled,
+                "volume_id": selected_volume_id if selected_volume else "",
+                "volume_label": str(selected_volume.get("label") or "") if selected_volume else "",
+                "volume_slug": str(selected_volume.get("slug") or "") if selected_volume else "",
+                "official_volume": bool(selected_volume.get("official", False)) if selected_volume else False,
+                "sort_order": int(selected_volume.get("sort_order") or 0) if selected_volume else 0,
+                "supported_game_modes": {
+                    "step_arrows": request.step_arrows_enabled,
+                    "orb_beat": request.orb_beat_enabled,
+                    "laser_shoot": request.step_arrows_enabled,
+                },
+            }
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Updated rhythm-game asset settings for '{saved['label']}'.")
+        return {"project": saved, "volumes": volumes}
+
+    @app.post("/api/rhythm-beats/projects/{project_id}/source/upload")
+    def upload_rhythm_beat_source(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        original_name = Path(file.filename or "source").name
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", original_name).strip("._") or "source"
+        suffix = Path(safe_name).suffix.lower()
+        temp_path = Path("data/rhythm-beats/.uploads") / f"{Path(safe_name).stem}-{uuid4().hex[:8]}{suffix}"
+        try:
+            validate_supported_source(temp_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with temp_path.open("wb") as output:
+                shutil.copyfileobj(file.file, output)
+            probe = probe_audio(temp_path)
+            project = read_rhythm_project(project_id)
+            source = copy_uploaded_source_audio(project_id, temp_path)
+            source["label"] = original_name
+            source["duration_seconds"] = probe.duration_seconds
+            project["source"] = source
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            file.file.close()
+        _sync_local_library_index()
+        ui_log.add("info", f"Attached uploaded source audio to rhythm beat project '{saved['label']}'.")
+        return {"project": saved}
+
+    @app.post("/api/rhythm-beats/projects/{project_id}/source/asset")
+    def set_rhythm_beat_source_asset(project_id: str, request: RhythmBeatProjectAssetRequest) -> dict[str, Any]:
+        try:
+            asset = _find_editor_asset(request.asset_id)
+            audio_path = Path(str(asset.get("audio_path") or "")).expanduser()
+            if not audio_path.exists() or not audio_path.is_file():
+                raise FileNotFoundError(f"Asset audio not found: {audio_path}")
+            project = read_rhythm_project(project_id)
+            probe = probe_audio(audio_path)
+            project["source"] = {
+                "label": str(asset.get("label") or audio_path.stem),
+                "audio_path": str(audio_path),
+                "audio_url": f"/api/audio?path={quote(str(audio_path))}",
+                "duration_seconds": probe.duration_seconds,
+                "source_asset_id": str(asset.get("asset_id") or ""),
+                "source_category": str(asset.get("category") or ""),
+            }
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Attached source asset to rhythm beat project '{saved['label']}'.")
+        return {"project": saved}
+
+    @app.post("/api/rhythm-beats/projects/{project_id}/tracks/asset")
+    def add_rhythm_beat_track_asset(project_id: str, request: RhythmBeatProjectAssetRequest) -> dict[str, Any]:
+        try:
+            asset = _find_editor_asset(request.asset_id)
+            audio_path = Path(str(asset.get("audio_path") or "")).expanduser()
+            if not audio_path.exists() or not audio_path.is_file():
+                raise FileNotFoundError(f"Asset audio not found: {audio_path}")
+            probe = probe_audio(audio_path)
+            project = read_rhythm_project(project_id)
+            tracks = list(project.get("tracks") or [])
+            tracks.append(
+                {
+                    "track_id": f"track-{uuid4().hex[:10]}",
+                    "label": str(asset.get("label") or audio_path.stem),
+                    "audio_path": str(audio_path),
+                    "audio_url": f"/api/audio?path={quote(str(audio_path))}",
+                    "duration_seconds": probe.duration_seconds,
+                    "source_asset_id": str(asset.get("asset_id") or ""),
+                    "source_category": str(asset.get("category") or ""),
+                    "created_at": str(project.get("updated_at") or ""),
+                }
+            )
+            project["tracks"] = tracks
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Added linked track to rhythm beat project '{saved['label']}'.")
+        return {"project": saved}
+
+    @app.post("/api/rhythm-beats/projects/{project_id}/extract-track")
+    def extract_rhythm_beat_track(project_id: str, request: RhythmBeatExtractionRequest) -> dict[str, Any]:
+        try:
+            project = read_rhythm_project(project_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source = dict(project.get("source") or {})
+        source_path = Path(str(source.get("audio_path") or "")).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=400, detail="Attach a source song before extracting tracks.")
+        label = request.label.strip() if request.label else _default_rhythm_track_label(source_path, request.track_name)
+        metadata = _run_extraction_job(
+            runtime_config=runtime_config,
+            ui_log=ui_log,
+            source_path=source_path,
+            track_name=request.track_name.strip().lower(),
+            label=label,
+            output_format=request.output_format,
+            inference_steps=request.inference_steps,
+            guidance_scale=request.guidance_scale,
+            shift=request.shift,
+            infer_method=request.infer_method,
+            use_tiled_decode=request.use_tiled_decode,
+            dcw_enabled=request.dcw_enabled,
+            velocity_norm_threshold=request.velocity_norm_threshold,
+            velocity_ema_factor=request.velocity_ema_factor,
+            seed=request.seed,
+            instruction=request.instruction,
+            rhythm_project_id=project_id if request.attach_to_project else None,
+        )
+        if request.attach_to_project and metadata.get("status") == "complete":
+            project = _attach_extraction_to_rhythm_project(project_id=project_id, metadata=metadata)
+            return {"extraction": metadata, "project": project}
+        _sync_local_library_index()
+        return {"extraction": metadata}
+
+    @app.post("/api/rhythm-beats/projects/{project_id}/lyrics/extract")
+    def extract_rhythm_beat_lyrics(project_id: str, request: RhythmBeatLyricsExtractionRequest) -> dict[str, Any]:
+        try:
+            project = read_rhythm_project(project_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        source = dict(project.get("source") or {})
+        source_path = Path(str(source.get("audio_path") or "")).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=400, detail="Attach a source song before extracting lyrics.")
+        ui_log.add("info", f"Running lyrics extraction for rhythm beat project '{project.get('label')}'.")
+        try:
+            lyrics = _extract_lyrics_from_audio(
+                audio_path=source_path,
+                model_name=request.model.strip(),
+                language=request.language,
+                include_word_timestamps=not request.disable_word_timestamps,
+            )
+        except Exception as exc:
+            ui_log.add("error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        project["lyrics"] = lyrics
+        saved = write_rhythm_project(project)
+        _sync_local_library_index()
+        ui_log.add("info", f"Extracted lyrics for rhythm beat project '{saved['label']}'.")
+        return {"project": saved, "lyrics": lyrics}
+
+    @app.delete("/api/rhythm-beats/projects/{project_id}/tracks/{track_id}")
+    def remove_rhythm_beat_track(project_id: str, track_id: str) -> dict[str, Any]:
+        try:
+            project = read_rhythm_project(project_id)
+            before = len(project.get("tracks") or [])
+            project["tracks"] = [track for track in project.get("tracks") or [] if str(track.get("track_id") or "") != track_id]
+            if len(project["tracks"]) == before:
+                raise FileNotFoundError(f"Rhythm beat track not found: {track_id}")
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Removed linked track from rhythm beat project '{saved['label']}'.")
+        return {"project": saved}
+
+    @app.delete("/api/rhythm-beats/projects/{project_id}/selections/{selection_id}")
+    def remove_rhythm_beat_selection(project_id: str, selection_id: str) -> dict[str, Any]:
+        try:
+            project = read_rhythm_project(project_id)
+            before = len(project.get("selections") or [])
+            project["selections"] = [
+                selection for selection in project.get("selections") or []
+                if str(selection.get("selection_id") or "") != selection_id
+            ]
+            if len(project["selections"]) == before:
+                raise FileNotFoundError(f"Rhythm beat selection not found: {selection_id}")
+            saved = write_rhythm_project(project)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_local_library_index()
+        ui_log.add("info", f"Removed saved selection from rhythm beat project '{saved['label']}'.")
+        return {"project": saved}
 
     @app.get("/api/library/local")
     def list_local_library() -> dict[str, object]:
@@ -2731,11 +3577,11 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 lokr_adapter_name=lokr_adapter_name,
             )
         except AceStepApiError as exc:
-            ui_log.add("error", str(exc))
+            failure = _handle_ace_runtime_failure(runtime_config, ui_log, "ACE-Step music generation failed.", exc)
             metadata = {
                 "generation_id": generation_id,
-                "status": "failed",
-                "message": str(exc),
+                "status": "recovering" if failure["recovery_active"] else "failed",
+                "message": failure["message"],
                 "created_at": created_at,
                 "label": label,
                 "prompt": prompt,
@@ -2745,6 +3591,7 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 "lokr_scale": request.lokr_scale if lokr_adapter else None,
                 "metadata_path": str(metadata_path),
                 "settings": request.model_dump(),
+                "runtime_recovery": failure["recovery"],
             }
             _write_metadata(metadata_path, metadata)
             return {"generation": metadata}
@@ -2879,91 +3726,25 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
 
     @app.post("/api/extractions/run")
     def run_extraction(request: ExtractionRunRequest) -> dict[str, object]:
-        import datetime as _datetime
-
-        track_name = request.track_name.strip().lower()
-        if track_name not in EXTRACT_TRACKS:
-            raise HTTPException(status_code=400, detail=f"Unknown extract track: {request.track_name}")
-
         source_path = Path(request.source_path).expanduser()
-        try:
-            probe = probe_audio(source_path)
-        except Exception as exc:
-            ui_log.add("error", str(exc))
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        extraction_id = f"extraction-{uuid4().hex[:12]}"
-        save_dir = Path("data/extractions") / extraction_id
-        metadata_path = save_dir / "extraction.json"
-        created_at = _datetime.datetime.now(_datetime.UTC).isoformat()
-        ui_log.add("info", f"Running ACE-Step extract for {track_name}; base model will be loaded in the ACE runtime if needed.")
-
-        try:
-            result = AceStepApiClient(runtime_config).extract_track(
-                source_path=source_path,
-                track_name=track_name,
-                save_dir=save_dir,
-                audio_format=request.output_format,
-                inference_steps=request.inference_steps,
-                guidance_scale=request.guidance_scale,
-                shift=request.shift,
-                infer_method=request.infer_method,
-                use_tiled_decode=request.use_tiled_decode,
-                dcw_enabled=request.dcw_enabled,
-                velocity_norm_threshold=request.velocity_norm_threshold,
-                velocity_ema_factor=request.velocity_ema_factor,
-                seed=request.seed,
-                instruction=request.instruction.strip() if request.instruction else None,
-            )
-        except AceStepApiError as exc:
-            ui_log.add("error", str(exc))
-            metadata = {
-                "extraction_id": extraction_id,
-                "status": "failed",
-                "message": str(exc),
-                "created_at": created_at,
-                "source_path": str(source_path),
-                "source_format": probe.source_format,
-                "source_duration_seconds": probe.duration_seconds,
-                "track_name": track_name,
-                "label": request.label.strip() if request.label else track_name,
-                "output_format": request.output_format,
-                "metadata_path": str(metadata_path),
-            }
-            metadata_path.parent.mkdir(parents=True, exist_ok=True)
-            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-            return {"extraction": metadata}
-
-        metadata = {
-            "extraction_id": extraction_id,
-            "status": "complete",
-            "message": "Extraction complete.",
-            "created_at": created_at,
-            "source_path": str(source_path),
-            "source_format": probe.source_format,
-            "source_duration_seconds": probe.duration_seconds,
-            "track_name": track_name,
-            "label": request.label.strip() if request.label else track_name,
-            "output_format": request.output_format,
-            "generated_audio_path": str(result.output_path),
-            "generated_metadata_path": str(result.metadata_path),
-            "metadata_path": str(metadata_path),
-            "settings": {
-                "inference_steps": request.inference_steps,
-                "guidance_scale": request.guidance_scale,
-                "shift": request.shift,
-                "infer_method": request.infer_method,
-                "use_tiled_decode": request.use_tiled_decode,
-                "dcw_enabled": request.dcw_enabled,
-                "velocity_norm_threshold": request.velocity_norm_threshold,
-                "velocity_ema_factor": request.velocity_ema_factor,
-                "seed": request.seed,
-                "instruction": request.instruction,
-            },
-        }
-        metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        ui_log.add("info", f"Extracted {track_name}: {result.output_path}")
+        metadata = _run_extraction_job(
+            runtime_config=runtime_config,
+            ui_log=ui_log,
+            source_path=source_path,
+            track_name=request.track_name.strip().lower(),
+            label=request.label.strip() if request.label else request.track_name.strip().lower(),
+            output_format=request.output_format,
+            inference_steps=request.inference_steps,
+            guidance_scale=request.guidance_scale,
+            shift=request.shift,
+            infer_method=request.infer_method,
+            use_tiled_decode=request.use_tiled_decode,
+            dcw_enabled=request.dcw_enabled,
+            velocity_norm_threshold=request.velocity_norm_threshold,
+            velocity_ema_factor=request.velocity_ema_factor,
+            seed=request.seed,
+            instruction=request.instruction,
+        )
         return {"extraction": metadata}
 
     @app.post("/api/extractions/base-test")
@@ -2994,18 +3775,19 @@ def create_app(models_dir: Path = Path("models"), runtime_config: RuntimeConfig 
                 seed=request.seed,
             )
         except AceStepApiError as exc:
-            ui_log.add("error", str(exc))
+            failure = _handle_ace_runtime_failure(runtime_config, ui_log, "ACE-Step Base text-to-music test failed.", exc)
             metadata = {
                 "extraction_id": generation_id,
                 "type": "base_test",
-                "status": "failed",
-                "message": str(exc),
+                "status": "recovering" if failure["recovery_active"] else "failed",
+                "message": failure["message"],
                 "created_at": created_at,
                 "track_name": "Base text2music test",
                 "prompt": prompt,
                 "output_format": request.output_format,
                 "metadata_path": str(metadata_path),
                 "settings": request.model_dump(),
+                "runtime_recovery": failure["recovery"],
             }
             metadata_path.parent.mkdir(parents=True, exist_ok=True)
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")

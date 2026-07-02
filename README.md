@@ -4,7 +4,7 @@ Dance Station is an AI-assisted audio workstation distributed by **The Faceless 
 
 The goal is to give creators, streamers, visualizers, rhythm-game experimenters, and media builders one practical local workspace for generating, extending, separating, editing, performing, arranging, and reusing music clips.
 
-The app currently includes six main work areas:
+The app currently includes seven main work areas:
 
 - **Autotransition**: continue a source song from a selected point and create a natural transition into newly generated music.
 - **Extraction**: separate useful musical parts from a song using ACE-Step extraction.
@@ -12,8 +12,9 @@ The app currently includes six main work areas:
 - **LoKr Training**: build captioned music datasets, preprocess them with Side-Step, train LoKr style adapters, and use completed adapters during generation.
 - **Instrument Lab**: create and edit instrument performances with tracks, piano-roll editing, computer-key input, sampled instruments, and SFZ imports.
 - **Audio Editor**: edit, repair, record, export, and arrange audio with the integrated AudioMass editor.
+- **Rhythm Beat Lab**: author rhythm-game beat charts from a source song and extracted layers, then save final chart assets into the local library.
 
-All saved outputs become reusable Dance Station assets. Transitions, generations, extractions, merges, edits, instrument clips, and instrument tracks can be labeled, played in the UI, loaded into compatible tabs, and reused as source material for the next step.
+All saved outputs become reusable Dance Station assets. Transitions, generations, extractions, merges, edits, instrument clips, instrument tracks, datasets, LoKr adapters, and rhythm beat charts can be labeled, played or inspected in the UI, loaded into compatible tabs, and reused as source material for the next step.
 
 The current command-line package is still named `autotransition`, so setup and run commands use that executable.
 
@@ -147,6 +148,24 @@ http://127.0.0.1:7860/audiomass/
 ```
 
 The integrated copy preserves the upstream AudioMass MIT license and third-party notices under `src/autotransition/vendor/audiomass/`.
+
+## Rhythm Beat Lab
+
+Rhythm Beat Lab moves rhythm chart authoring into standalone Dance Station instead of keeping it in a separate site admin workflow.
+
+The current standalone workflow lets you:
+
+1. create a local rhythm beat project
+2. attach a full source song from disk or from an existing Dance Station asset
+3. extract ACE-Step stems directly from the attached source song and add them back into the project as linked tracks
+4. add other extracted or generated layers as linked tracks
+5. run local hybrid-style beat analysis on the full song or any linked track
+6. extract lyrics locally from the source song with Faster-Whisper, then edit them in place
+7. drag-select beat ranges on the chart and save them as named beat-selection layers
+8. merge saved beat-selection layers into candidate chart results, or promote a single layer directly when that is the better result
+9. promote one candidate as the final chart and save it into the local library as a `rhythm_game` asset
+
+Final rhythm beat assets are exported as chart JSON plus the linked song audio so they can publish through the same library flow as the other Dance Station asset types.
 
 ## ACE-Step Runtime
 
