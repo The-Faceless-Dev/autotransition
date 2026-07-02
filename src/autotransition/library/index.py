@@ -171,7 +171,10 @@ def _merge_reindexed_item(existing: LibraryItem | None, scanned: LibraryItem) ->
     scanned.status = existing.status
     scanned.created_at = existing.created_at or scanned.created_at
     scanned.updated_at = utc_now_iso()
-    scanned.metadata = {**scanned.metadata, **existing.metadata}
+    # Reindexed metadata should win for derived/runtime-backed fields so library
+    # views reflect the current source project state after saves. Preserve only
+    # metadata that the scanned item does not supply, such as publish linkage.
+    scanned.metadata = {**existing.metadata, **scanned.metadata}
     scanned.source_lineage = {**scanned.source_lineage, **existing.source_lineage}
     existing_cover_files = [file for file in existing.files if file.role == "cover"]
     if existing_cover_files and not any(file.role == "cover" for file in scanned.files):

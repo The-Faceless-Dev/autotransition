@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -80,7 +81,29 @@ class ApiHealthDetail:
     message: str
 
 
+@dataclass(frozen=True)
+class RuntimeRecoveryState:
+    active: bool
+    phase: str
+    message: str
+    reason: str | None = None
+    started_at: float | None = None
+    last_error: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 StartupStatusCallback = Callable[[str], None]
+
+
+_runtime_recovery_lock = threading.Lock()
+_runtime_recovery_thread: threading.Thread | None = None
+_runtime_recovery_state = RuntimeRecoveryState(
+    active=False,
+    phase="idle",
+    message="No ACE-Step recovery is in progress.",
+)
 
 
 def runtime_pid_path() -> Path:
@@ -204,7 +227,11 @@ def build_runtime_env() -> dict[str, str]:
     env.setdefault("TMP", str(Path("data/runtime/tmp").resolve()))
     env.setdefault("ACESTEP_CONFIG_PATH", "acestep-v15-turbo")
     env.setdefault("ACESTEP_CONFIG_PATH2", "acestep-v15-base")
-    if env.get("DANCE_STATION_RUNTIME_OFFLOAD", "1").lower() not in ("0", "false", "no"):
+    # ACE-Step base extraction has been crashing on Windows inside PyTorch's CPU
+    # transfer path after repeated runs. Keep the general offload path disabled there
+    # unless the user explicitly forces it back on.
+    offload_default = "0" if sys.platform == "win32" else "1"
+    if env.get("DANCE_STATION_RUNTIME_OFFLOAD", offload_default).lower() not in ("0", "false", "no"):
         env.setdefault("ACESTEP_OFFLOAD_TO_CPU", "1")
     if env.get("DANCE_STATION_RUNTIME_DIT_OFFLOAD", "1").lower() not in ("0", "false", "no"):
         env.setdefault("ACESTEP_OFFLOAD_DIT_TO_CPU", "1")
@@ -258,6 +285,217 @@ def read_runtime_pid() -> int | None:
         return int(pid_path.read_text(encoding="utf-8").strip())
     except ValueError:
         return None
+
+
+def _set_runtime_recovery_state(
+    *,
+    active: bool,
+    phase: str,
+    message: str,
+    reason: str | None = None,
+    started_at: float | None = None,
+    last_error: str | None = None,
+) -> RuntimeRecoveryState:
+    global _runtime_recovery_state
+    state = RuntimeRecoveryState(
+        active=active,
+        phase=phase,
+        message=message,
+        reason=reason,
+        started_at=started_at,
+        last_error=last_error,
+    )
+    _runtime_recovery_state = state
+    return state
+
+
+def runtime_recovery_state() -> RuntimeRecoveryState:
+    with _runtime_recovery_lock:
+        return _runtime_recovery_state
+
+
+def managed_runtime_alive(config: RuntimeConfig = RuntimeConfig()) -> bool:
+    managed_pid = read_runtime_pid()
+    if managed_pid is None:
+        return False
+    return any(process.pid == managed_pid for process in find_runtime_processes(config))
+
+
+def schedule_runtime_recovery(
+    reason: str,
+    config: RuntimeConfig = RuntimeConfig(),
+    status_callback: StartupStatusCallback | None = None,
+) -> RuntimeRecoveryState:
+    global _runtime_recovery_thread
+
+    def emit(message: str) -> None:
+        with _runtime_recovery_lock:
+            current = _runtime_recovery_state
+            _set_runtime_recovery_state(
+                active=True,
+                phase="recovering",
+                message=message,
+                reason=current.reason or reason,
+                started_at=current.started_at or time.time(),
+                last_error=current.last_error,
+            )
+        if status_callback is not None:
+            status_callback(message)
+
+    def runner(started_at: float) -> None:
+        global _runtime_recovery_thread
+        try:
+            emit("ACE-Step runtime is restarting after a crash.")
+            if not api_health(config):
+                managed_pid = read_runtime_pid()
+                if managed_pid is not None and managed_runtime_alive(config):
+                    stop_runtime_process_tree(managed_pid, config)
+                else:
+                    _clear_runtime_pid(managed_pid)
+            result = ensure_runtime_api(config, status_callback=emit)
+            if result.started or result.already_running:
+                with _runtime_recovery_lock:
+                    _set_runtime_recovery_state(
+                        active=False,
+                        phase="ready",
+                        message="ACE-Step runtime recovered and is ready.",
+                        reason=reason,
+                        started_at=started_at,
+                        last_error=None,
+                    )
+                return
+            with _runtime_recovery_lock:
+                _set_runtime_recovery_state(
+                    active=False,
+                    phase="error",
+                    message=result.message,
+                    reason=reason,
+                    started_at=started_at,
+                    last_error=result.message,
+                )
+        except Exception as exc:
+            with _runtime_recovery_lock:
+                _set_runtime_recovery_state(
+                    active=False,
+                    phase="error",
+                    message=f"ACE-Step runtime restart failed: {exc}",
+                    reason=reason,
+                    started_at=started_at,
+                    last_error=str(exc),
+                )
+        finally:
+            with _runtime_recovery_lock:
+                _runtime_recovery_thread = None
+
+    with _runtime_recovery_lock:
+        if _runtime_recovery_thread is not None and _runtime_recovery_thread.is_alive():
+            return _runtime_recovery_state
+        started_at = time.time()
+        _set_runtime_recovery_state(
+            active=True,
+            phase="queued",
+            message="ACE-Step runtime recovery has been queued.",
+            reason=reason,
+            started_at=started_at,
+            last_error=None,
+        )
+        _runtime_recovery_thread = threading.Thread(
+            target=runner,
+            args=(started_at,),
+            name="ace-step-runtime-recovery",
+            daemon=True,
+        )
+        _runtime_recovery_thread.start()
+        return _runtime_recovery_state
+
+
+def schedule_runtime_recycle(
+    reason: str,
+    config: RuntimeConfig = RuntimeConfig(),
+    status_callback: StartupStatusCallback | None = None,
+) -> RuntimeRecoveryState:
+    global _runtime_recovery_thread
+
+    def emit(message: str) -> None:
+        with _runtime_recovery_lock:
+            current = _runtime_recovery_state
+            _set_runtime_recovery_state(
+                active=True,
+                phase="recovering",
+                message=message,
+                reason=current.reason or reason,
+                started_at=current.started_at or time.time(),
+                last_error=current.last_error,
+            )
+        if status_callback is not None:
+            status_callback(message)
+
+    def runner(started_at: float) -> None:
+        global _runtime_recovery_thread
+        try:
+            emit("ACE-Step runtime is restarting to release base-extraction memory.")
+            managed_pid = read_runtime_pid()
+            if managed_pid is not None and managed_runtime_alive(config):
+                stop_runtime_process_tree(managed_pid, config)
+            else:
+                for process in find_runtime_processes(config):
+                    stop_runtime_process_tree(process.pid, config)
+                _clear_runtime_pid(managed_pid)
+            result = ensure_runtime_api(config, status_callback=emit)
+            if result.started or result.already_running:
+                with _runtime_recovery_lock:
+                    _set_runtime_recovery_state(
+                        active=False,
+                        phase="ready",
+                        message="ACE-Step runtime restarted and is ready.",
+                        reason=reason,
+                        started_at=started_at,
+                        last_error=None,
+                    )
+                return
+            with _runtime_recovery_lock:
+                _set_runtime_recovery_state(
+                    active=False,
+                    phase="error",
+                    message=result.message,
+                    reason=reason,
+                    started_at=started_at,
+                    last_error=result.message,
+                )
+        except Exception as exc:
+            with _runtime_recovery_lock:
+                _set_runtime_recovery_state(
+                    active=False,
+                    phase="error",
+                    message=f"ACE-Step runtime restart failed: {exc}",
+                    reason=reason,
+                    started_at=started_at,
+                    last_error=str(exc),
+                )
+        finally:
+            with _runtime_recovery_lock:
+                _runtime_recovery_thread = None
+
+    with _runtime_recovery_lock:
+        if _runtime_recovery_thread is not None and _runtime_recovery_thread.is_alive():
+            return _runtime_recovery_state
+        started_at = time.time()
+        _set_runtime_recovery_state(
+            active=True,
+            phase="queued",
+            message="ACE-Step runtime restart has been queued.",
+            reason=reason,
+            started_at=started_at,
+            last_error=None,
+        )
+        _runtime_recovery_thread = threading.Thread(
+            target=runner,
+            args=(started_at,),
+            name="ace-step-runtime-recycle",
+            daemon=True,
+        )
+        _runtime_recovery_thread.start()
+        return _runtime_recovery_state
 
 
 def find_runtime_processes(config: RuntimeConfig = RuntimeConfig()) -> list[RuntimeProcess]:
@@ -441,9 +679,18 @@ def runtime_status(config: RuntimeConfig = RuntimeConfig()) -> AceStepRuntimeSta
     git_available = shutil.which("git") is not None
     health = api_health_detail(config)
     running = health.running
+    recovery = runtime_recovery_state()
+    managed_pid = read_runtime_pid()
+    managed_alive = managed_runtime_alive(config) if managed_pid is not None else False
 
     if running:
         message = "ACE-Step API is running."
+    elif recovery.active:
+        message = recovery.message
+    elif recovery.phase == "error" and recovery.last_error:
+        message = recovery.message
+    elif managed_pid is not None and not managed_alive:
+        message = "ACE-Step runtime stopped unexpectedly. Recovery can restart it without restarting the full app."
     elif installed:
         message = f"ACE-Step runtime is installed, but the API is not ready. {health.message}"
     else:

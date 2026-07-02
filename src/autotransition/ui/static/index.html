@@ -27,6 +27,7 @@
       <button id="lokrTrainingTabButton" class="tab-button" type="button">LoKr Training</button>
       <button id="instrumentLabTabButton" class="tab-button" type="button">Instrument Lab</button>
       <button id="audioEditTabButton" class="tab-button" type="button">Audio Editor</button>
+      <button id="rhythmBeatTabButton" class="tab-button" type="button">Rhythm Beat Lab</button>
       <button id="libraryTabButton" class="tab-button" type="button">Library</button>
     </nav>
 
@@ -1020,6 +1021,280 @@
       </section>
     </main>
 
+    <main id="rhythmBeatPage" class="workspace app-page rhythm-page">
+      <section class="panel rhythm-projects-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Rhythm Beat Projects</h2>
+            <div id="rhythmProjectReadout" class="editor-subtitle">No project selected</div>
+          </div>
+          <span id="rhythmProjectState" class="mini-state">Idle</span>
+        </div>
+        <div class="control-grid">
+          <label class="field">
+            <span>New project</span>
+            <input id="rhythmProjectLabel" type="text" value="New rhythm beat project" />
+          </label>
+          <div class="field button-field">
+            <span>Project</span>
+            <button id="createRhythmProjectButton" class="primary-button" type="button">Create</button>
+          </div>
+          <div class="field button-field">
+            <span>Refresh</span>
+            <button id="refreshRhythmProjectsButton" class="secondary-button" type="button">Refresh</button>
+          </div>
+        </div>
+        <div id="rhythmProjectList" class="generated-list compact-library-list">
+          <div class="empty-result">No rhythm beat projects yet.</div>
+        </div>
+
+        <div class="panel-heading compact-heading">
+          <h2>Source Song</h2>
+          <span id="rhythmSourceState" class="mini-state">No source</span>
+        </div>
+        <div class="file-picker">
+          <label class="file-button" for="rhythmSourceFile">Choose Audio File</label>
+          <input id="rhythmSourceFile" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,audio/*" />
+          <span id="rhythmSourceFileName">No file selected</span>
+        </div>
+        <div class="existing-source-picker">
+          <label class="field">
+            <span>Existing creation</span>
+            <select id="rhythmSourceAssetSelect">
+              <option value="">Choose an existing creation</option>
+            </select>
+          </label>
+          <button id="loadRhythmSourceAssetButton" class="secondary-button" type="button">Use Creation</button>
+        </div>
+        <button id="uploadRhythmSourceButton" class="secondary-button" type="button">Attach Uploaded Source</button>
+        <div id="rhythmSourceSummary" class="summary">Attach a song source first. Extracted tracks can then be layered into the project.</div>
+        <div id="rhythmPlaybackList" class="generated-list compact-library-list rhythm-playback-list">
+          <div class="empty-result">No source or extracted layers yet.</div>
+        </div>
+        <audio id="rhythmSourceAudio" class="audio-player" controls preload="metadata"></audio>
+
+        <div class="panel-heading compact-heading">
+          <h2>Linked Tracks</h2>
+          <span id="rhythmTrackState" class="mini-state">0 tracks</span>
+        </div>
+        <div class="existing-source-picker">
+          <label class="field">
+            <span>Add existing creation</span>
+            <select id="rhythmTrackAssetSelect">
+              <option value="">Choose an extraction or audio creation</option>
+            </select>
+          </label>
+          <button id="addRhythmTrackButton" class="secondary-button" type="button">Add Track</button>
+        </div>
+      </section>
+
+      <section class="panel rhythm-chart-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Chart</h2>
+            <div id="rhythmChartReadout" class="editor-subtitle">Select a project and run analysis.</div>
+          </div>
+          <span id="rhythmSelectionState" class="mini-state">Idle</span>
+        </div>
+        <div class="control-grid rhythm-chart-controls">
+          <label class="field">
+            <span>View</span>
+            <select id="rhythmViewMode">
+              <option value="analysis">Active analysis</option>
+              <option value="final">Final chart</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Lane</span>
+            <select id="rhythmActiveAnalysisSelect">
+              <option value="">Choose analysis</option>
+            </select>
+          </label>
+        </div>
+        <div class="timeline-shell rhythm-timeline-shell">
+          <div class="timeline-meta">
+            <span id="rhythmCursorReadout">0:00</span>
+            <span id="rhythmRangeReadout">No selected range</span>
+          </div>
+          <div id="rhythmChartScroller" class="rhythm-chart-scroller">
+            <div id="rhythmChartStack" class="rhythm-chart-stack"></div>
+          </div>
+        </div>
+        <div class="summary">Drag on the chart to create a beat selection range. Click the chart without dragging to move the playback cursor.</div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Hybrid Analysis</h2>
+            <span id="rhythmAnalysisState" class="mini-state">Idle</span>
+          </div>
+          <div class="rhythm-subsection">
+            <div class="rhythm-subsection-title">Track Extraction</div>
+            <div class="control-grid">
+              <label class="field">
+                <span>Extract track</span>
+                <select id="rhythmExtractTrackName">
+                  <option value="vocals">Vocals</option>
+                  <option value="backing_vocals">Backing Vocals</option>
+                  <option value="drums">Drums</option>
+                  <option value="bass">Bass</option>
+                  <option value="guitar">Guitar</option>
+                  <option value="keyboard">Keyboard</option>
+                  <option value="percussion">Percussion</option>
+                  <option value="strings">Strings</option>
+                  <option value="synth">Synth</option>
+                  <option value="fx">FX</option>
+                  <option value="brass">Brass</option>
+                  <option value="woodwinds">Woodwinds</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Track label</span>
+                <input id="rhythmExtractTrackLabel" type="text" placeholder="source_tracktype" />
+              </label>
+              <label class="field">
+                <span>Guidance scale</span>
+                <input id="rhythmExtractGuidanceScale" type="number" min="0" step="0.1" value="1.0" />
+              </label>
+              <div class="field button-field">
+                <span>Source</span>
+                <button id="runRhythmTrackExtractionButton" class="secondary-button" type="button">Extract Track From Source</button>
+              </div>
+            </div>
+          </div>
+          <div class="rhythm-subsection">
+            <div class="rhythm-subsection-title">Beat Analysis</div>
+            <div class="control-grid">
+            <label class="field">
+              <span>Analyze</span>
+              <select id="rhythmAnalysisTarget">
+                <option value="source">Source song</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Label</span>
+              <input id="rhythmAnalysisLabel" type="text" placeholder="Main groove, drum stem, vocal accents" />
+            </label>
+            <label class="field">
+              <span>Window size</span>
+              <input id="rhythmWindowSize" type="number" min="256" step="256" value="2048" />
+            </label>
+            <label class="field">
+              <span>Hop size</span>
+              <input id="rhythmHopSize" type="number" min="64" step="64" value="512" />
+            </label>
+            <label class="field">
+              <span>Smoothing</span>
+              <input id="rhythmSmoothingAlpha" type="number" min="0" max="1" step="0.05" value="0.35" />
+            </label>
+            <label class="field">
+              <span>Min strength</span>
+              <input id="rhythmMinStrength" type="number" min="0" max="1" step="0.01" value="0.16" />
+            </label>
+            <label class="field">
+              <span>Min prominence</span>
+              <input id="rhythmMinProminence" type="number" min="0" max="1" step="0.01" value="0.05" />
+            </label>
+            <label class="field">
+              <span>Min distance seconds</span>
+              <input id="rhythmMinDistanceSeconds" type="number" min="0.05" step="0.01" value="0.22" />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="runRhythmAnalysisButton" class="primary-button" type="button">Run Analysis</button>
+          </div>
+          </div>
+          <div id="rhythmAnalysisList" class="generated-list compact-library-list">
+            <div class="empty-result">No saved analyses yet.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Selections And Merges</h2>
+            <span id="rhythmMergeState" class="mini-state">Idle</span>
+          </div>
+          <label class="field">
+            <span>Selection label</span>
+            <input id="rhythmSelectionLabel" type="text" placeholder="Intro pulse, chorus hits, bassline accents" />
+          </label>
+          <div class="button-row">
+            <button id="saveRhythmSelectionButton" class="secondary-button" type="button">Save Selection</button>
+          </div>
+          <div id="rhythmSelectionList" class="generated-list compact-library-list">
+            <div class="empty-result">No beat selections yet.</div>
+          </div>
+          <label class="field">
+            <span>Merge label</span>
+            <input id="rhythmMergeLabel" type="text" placeholder="Final groove candidate A" />
+          </label>
+          <div class="button-row">
+            <button id="mergeRhythmSelectionsButton" class="secondary-button" type="button">Create Candidate From Selected Layers</button>
+            <button id="finalizeRhythmMergeButton" class="primary-button" type="button">Set As Final</button>
+          </div>
+          <div id="rhythmMergeList" class="generated-list compact-library-list">
+            <div class="empty-result">No merge candidates yet.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Lyrics And Final Asset</h2>
+            <span id="rhythmAssetState" class="mini-state">No final</span>
+          </div>
+          <div class="control-grid">
+            <label class="field">
+              <span>Lyrics model</span>
+              <select id="rhythmLyricsModel">
+                <option value="small">small</option>
+                <option value="base">base</option>
+                <option value="tiny">tiny</option>
+                <option value="medium">medium</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Language hint</span>
+              <input id="rhythmLyricsLanguage" type="text" placeholder="optional, ex: en" />
+            </label>
+            <div class="field button-field">
+              <span>Source</span>
+              <button id="extractRhythmLyricsButton" class="secondary-button" type="button">Extract Lyrics</button>
+            </div>
+          </div>
+          <label class="field">
+            <span>Lyrics text</span>
+            <textarea id="rhythmLyricsText" rows="6" placeholder="Extract lyrics from the source song or paste/edit them manually."></textarea>
+          </label>
+          <div class="button-row">
+            <button id="saveRhythmLyricsButton" class="secondary-button" type="button">Save Lyrics</button>
+            <button id="saveRhythmProjectButton" class="secondary-button" type="button">Save Project</button>
+          </div>
+          <div id="rhythmAssetSummary" class="summary">Finalize a merge to create a publishable rhythm beat asset in the local library.</div>
+          <div id="rhythmAssetList" class="generated-list compact-library-list">
+            <div class="empty-result">No final rhythm beat assets yet.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Rhythm Volumes</h2>
+            <span class="mini-state">Manage custom volumes</span>
+          </div>
+          <div class="existing-source-picker">
+            <label class="field">
+              <span>New volume</span>
+              <input id="rhythmVolumeLabel" type="text" placeholder="Hip Hop, Ricky Martin, Volume 2" />
+            </label>
+            <button id="createRhythmVolumeButton" class="secondary-button" type="button">Create Volume</button>
+          </div>
+          <div id="rhythmVolumeList" class="generated-list compact-library-list">
+            <div class="empty-result">No rhythm-game volumes yet.</div>
+          </div>
+        </section>
+      </aside>
+    </main>
+
     <main id="libraryPage" class="workspace app-page library-page">
       <section class="panel library-browser-panel">
         <div class="panel-heading">
@@ -1048,6 +1323,7 @@
               <option value="instrumenttrack">Instrument Tracks</option>
               <option value="dataset">Datasets</option>
               <option value="lokr">LoKr Adapters</option>
+              <option value="rhythm_game">Rhythm Beats</option>
             </select>
           </label>
           <div class="field button-field">
